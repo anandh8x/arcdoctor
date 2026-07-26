@@ -11,6 +11,10 @@ It collects evidence from Arc RPC responses and turns common network problems in
 - Read the latest block number and timestamp
 - Measure RPC evidence collection latency
 - Report a wrong-network configuration
+- Validate EVM addresses before making RPC requests
+- Classify addresses by deployed bytecode
+- Report raw native-token balance, nonce, bytecode size, and bytecode hash
+- Link address evidence to ArcScan
 - Produce readable terminal output or machine-readable JSON
 - Redact credentials from operational error messages
 - Return distinct exit codes for healthy, diagnostic-error, and operational-error outcomes
@@ -46,6 +50,15 @@ Set a timeout:
 ```bash
 go run ./cmd/arcdoctor check --timeout 20s
 ```
+
+Inspect an address:
+
+```bash
+go run ./cmd/arcdoctor inspect 0xCe084c9358FBC5200415012885c2F0F0906d400C
+```
+
+The balance is reported in raw base units. Arc Doctor does not guess a display
+decimal value when the RPC response does not provide token metadata.
 
 ## Example
 
@@ -99,7 +112,9 @@ go build -o arcdoctor ./cmd/arcdoctor
 
 ## Scope
 
-The current implementation focuses on network diagnosis. Address, transaction, ABI-backed error, and deployment diagnostics will be added as their behavior is tested.
+The current implementation covers network and address diagnosis. Transaction,
+ABI-backed error, and deployment diagnostics will be added as their behavior is
+tested.
 
 Arc Doctor is a community-built tool and is not affiliated with or endorsed by Circle.
 

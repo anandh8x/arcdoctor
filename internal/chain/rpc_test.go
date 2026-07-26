@@ -3,6 +3,7 @@ package chain_test
 import (
 	"context"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,9 +30,8 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
-func TestRPCProbeCollectsArcNetworkEvidence(t *testing.T) {
-	t.Parallel()
-
+func rpcHTTPClient(t *testing.T, results map[string]any) *http.Client {
+	t.Helper()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request rpcRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -40,13 +40,6 @@ func TestRPCProbeCollectsArcNetworkEvidence(t *testing.T) {
 			return
 		}
 
-		results := map[string]any{
-			"eth_chainId":     "0x4cef52",
-			"eth_blockNumber": "0x33b1cb0",
-			"eth_getBlockByNumber": map[string]any{
-				"timestamp": "0x6975f7b0",
-			},
-		}
 		result, ok := results[request.Method]
 		if !ok {
 			t.Errorf("unexpected RPC method %q", request.Method)
@@ -64,13 +57,25 @@ func TestRPCProbeCollectsArcNetworkEvidence(t *testing.T) {
 		}
 	})
 
-	httpClient := &http.Client{
+	return &http.Client{
 		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			return recorder.Result(), nil
 		}),
 	}
+}
+
+func TestRPCProbeCollectsArcNetworkEvidence(t *testing.T) {
+	t.Parallel()
+
+	httpClient := rpcHTTPClient(t, map[string]any{
+		"eth_chainId":     "0x4cef52",
+		"eth_blockNumber": "0x33b1cb0",
+		"eth_getBlockByNumber": map[string]any{
+			"timestamp": "0x6975f7b0",
+		},
+	})
 
 	snapshot, err := chain.NewRPCProbe(
 		"http://arcdoctor.test",
@@ -92,5 +97,37 @@ func TestRPCProbeCollectsArcNetworkEvidence(t *testing.T) {
 	}
 	if snapshot.Latency <= 0 {
 		t.Errorf("Latency = %s, want positive duration", snapshot.Latency)
+	}
+}
+
+func TestRPCProbeCollectsAddressEvidence(t *testing.T) {
+	t.Parallel()
+
+	httpClient := rpcHTTPClient(t, map[string]any{
+		"eth_getBalance":          "0x1bc16d674ec80000",
+		"eth_getTransactionCount": "0x1",
+		"eth_getCode":             "0x60006000",
+	})
+	probe := chain.NewRPCProbe(
+		"http://arcdoctor.test",
+		chain.WithHTTPClient(httpClient),
+	)
+
+	snapshot, err := probe.AddressSnapshot(
+		context.Background(),
+		"0xCe084c9358FBC5200415012885c2F0F0906d400C",
+	)
+	if err != nil {
+		t.Fatalf("AddressSnapshot() error = %v", err)
+	}
+
+	if snapshot.BalanceBaseUnits.Cmp(big.NewInt(2_000_000_000_000_000_000)) != 0 {
+		t.Errorf("BalanceBaseUnits = %s, want 2000000000000000000", snapshot.BalanceBaseUnits)
+	}
+	if snapshot.Nonce != 1 {
+		t.Errorf("Nonce = %d, want 1", snapshot.Nonce)
+	}
+	if got, want := string(snapshot.Code), string([]byte{0x60, 0x00, 0x60, 0x00}); got != want {
+		t.Errorf("Code = %x, want %x", snapshot.Code, []byte(want))
 	}
 }

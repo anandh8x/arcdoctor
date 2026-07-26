@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"net/http"
 	"time"
 
@@ -75,5 +76,43 @@ func (p *RPCProbe) NetworkSnapshot(ctx context.Context) (doctor.NetworkSnapshot,
 		BlockNumber:    uint64(blockNumber),
 		BlockTimestamp: time.Unix(int64(block.Timestamp), 0).UTC(),
 		Latency:        time.Since(startedAt),
+	}, nil
+}
+
+func (p *RPCProbe) AddressSnapshot(
+	ctx context.Context,
+	address string,
+) (doctor.AddressSnapshot, error) {
+	client, err := rpc.DialOptions(ctx, p.url, rpc.WithHTTPClient(p.httpClient))
+	if err != nil {
+		return doctor.AddressSnapshot{}, fmt.Errorf("connect to RPC endpoint: %w", err)
+	}
+	defer client.Close()
+
+	var balance hexutil.Big
+	if err := client.CallContext(ctx, &balance, "eth_getBalance", address, "latest"); err != nil {
+		return doctor.AddressSnapshot{}, fmt.Errorf("read address balance: %w", err)
+	}
+
+	var nonce hexutil.Uint64
+	if err := client.CallContext(
+		ctx,
+		&nonce,
+		"eth_getTransactionCount",
+		address,
+		"latest",
+	); err != nil {
+		return doctor.AddressSnapshot{}, fmt.Errorf("read address nonce: %w", err)
+	}
+
+	var code hexutil.Bytes
+	if err := client.CallContext(ctx, &code, "eth_getCode", address, "latest"); err != nil {
+		return doctor.AddressSnapshot{}, fmt.Errorf("read address bytecode: %w", err)
+	}
+
+	return doctor.AddressSnapshot{
+		BalanceBaseUnits: new(big.Int).Set((*big.Int)(&balance)),
+		Nonce:            uint64(nonce),
+		Code:             append([]byte(nil), code...),
 	}, nil
 }
