@@ -15,6 +15,12 @@ It collects evidence from Arc RPC responses and turns common network problems in
 - Classify addresses by deployed bytecode
 - Report raw native-token balance, nonce, bytecode size, and bytecode hash
 - Link address evidence to ArcScan
+- Distinguish missing, pending, successful, and reverted transactions
+- Report sender, destination, value, gas, block, type, and ArcScan evidence
+- Decode transaction calldata from supplied Solidity ABIs or artifacts
+- Decode `Error(string)`, `Panic(uint256)`, and ABI-backed custom errors
+- Replay failed calls against historical state when the RPC endpoint supports it
+- Preserve raw revert data and report unavailable or inconclusive replay honestly
 - Produce readable terminal output or machine-readable JSON
 - Redact credentials from operational error messages
 - Return distinct exit codes for healthy, diagnostic-error, and operational-error outcomes
@@ -59,6 +65,21 @@ go run ./cmd/arcdoctor inspect 0xCe084c9358FBC5200415012885c2F0F0906d400C
 
 The balance is reported in raw base units. Arc Doctor does not guess a display
 decimal value when the RPC response does not provide token metadata.
+
+Inspect a transaction:
+
+```bash
+go run ./cmd/arcdoctor inspect 0x2ae2a47a07856ce9f0f6be62335f558bee7561e5922f53d119c58de66baead17
+```
+
+Decode public calldata and custom errors with a local ABI or Foundry artifact:
+
+```bash
+go run ./cmd/arcdoctor inspect 0xTRANSACTION_HASH --abi ./out/Contract.sol/Contract.json
+```
+
+Repeat `--abi` to provide more than one candidate. If selector matches conflict,
+Arc Doctor reports the ambiguity and does not guess.
 
 ## Example
 
@@ -112,9 +133,9 @@ go build -o arcdoctor ./cmd/arcdoctor
 
 ## Scope
 
-The current implementation covers network and address diagnosis. Transaction,
-ABI-backed error, and deployment diagnostics will be added as their behavior is
-tested.
+The current implementation covers network, address, transaction, and ABI-backed
+error diagnosis. Deployment verification and shareable report workflows will be
+added as their behavior is tested.
 
 Arc Doctor is a community-built tool and is not affiliated with or endorsed by Circle.
 

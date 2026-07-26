@@ -16,12 +16,20 @@ type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
 }
 
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result"`
+	Result  any             `json:"result,omitempty"`
+	Error   any             `json:"error,omitempty"`
+}
+
+type rpcFailure struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -48,11 +56,16 @@ func rpcHTTPClient(t *testing.T, results map[string]any) *http.Client {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(rpcResponse{
+		response := rpcResponse{
 			JSONRPC: "2.0",
 			ID:      request.ID,
-			Result:  result,
-		}); err != nil {
+		}
+		if failure, failed := result.(rpcFailure); failed {
+			response.Error = failure
+		} else {
+			response.Result = result
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("encode response: %v", err)
 		}
 	})
@@ -98,6 +111,9 @@ func TestRPCProbeCollectsArcNetworkEvidence(t *testing.T) {
 	if snapshot.Latency <= 0 {
 		t.Errorf("Latency = %s, want positive duration", snapshot.Latency)
 	}
+	if snapshot.ObservedAt.IsZero() {
+		t.Error("ObservedAt is zero")
+	}
 }
 
 func TestRPCProbeCollectsAddressEvidence(t *testing.T) {
@@ -129,5 +145,106 @@ func TestRPCProbeCollectsAddressEvidence(t *testing.T) {
 	}
 	if got, want := string(snapshot.Code), string([]byte{0x60, 0x00, 0x60, 0x00}); got != want {
 		t.Errorf("Code = %x, want %x", snapshot.Code, []byte(want))
+	}
+}
+
+func TestRPCProbeCollectsSuccessfulTransactionEvidence(t *testing.T) {
+	t.Parallel()
+
+	const hash = "0x2ae2a47a07856ce9f0f6be62335f558bee7561e5922f53d119c58de66baead17"
+	httpClient := rpcHTTPClient(t, map[string]any{
+		"eth_getTransactionByHash": map[string]any{
+			"hash":        hash,
+			"from":        "0x99066fBc97557490fA794F750630bb41733D1004",
+			"to":          "0xCe084c9358FBC5200415012885c2F0F0906d400C",
+			"value":       "0x0",
+			"input":       "0x12345678",
+			"gas":         "0x3d090",
+			"type":        "0x2",
+			"blockNumber": "0x32beabc",
+		},
+		"eth_getTransactionReceipt": map[string]any{
+			"status":          "0x1",
+			"gasUsed":         "0x16ced",
+			"blockNumber":     "0x32beabc",
+			"contractAddress": nil,
+		},
+	})
+	probe := chain.NewRPCProbe(
+		"http://arcdoctor.test",
+		chain.WithHTTPClient(httpClient),
+	)
+
+	snapshot, err := probe.TransactionSnapshot(context.Background(), hash)
+	if err != nil {
+		t.Fatalf("TransactionSnapshot() error = %v", err)
+	}
+	if !snapshot.Found {
+		t.Fatal("Found = false, want true")
+	}
+	if snapshot.To != "0xCe084c9358FBC5200415012885c2F0F0906d400C" {
+		t.Errorf("To = %q", snapshot.To)
+	}
+	if snapshot.Receipt == nil {
+		t.Fatal("Receipt is nil")
+	}
+	if snapshot.Receipt.Status != 1 {
+		t.Errorf("Receipt.Status = %d, want 1", snapshot.Receipt.Status)
+	}
+	if snapshot.Receipt.GasUsed != 93_421 {
+		t.Errorf("Receipt.GasUsed = %d, want 93421", snapshot.Receipt.GasUsed)
+	}
+	if snapshot.Replay.Status != "" {
+		t.Errorf("Replay.Status = %q, want empty for successful transaction", snapshot.Replay.Status)
+	}
+}
+
+func TestRPCProbeReplaysRevertedTransactionAtParentBlock(t *testing.T) {
+	t.Parallel()
+
+	const hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	httpClient := rpcHTTPClient(t, map[string]any{
+		"eth_getTransactionByHash": map[string]any{
+			"hash":        hash,
+			"from":        "0x99066fBc97557490fA794F750630bb41733D1004",
+			"to":          "0x0C83623d0abFca5e7ad6E6179bB45A3E70C6C9DA",
+			"value":       "0x0",
+			"input":       "0x12345678",
+			"gas":         "0x3d090",
+			"type":        "0x2",
+			"blockNumber": "0x10",
+		},
+		"eth_getTransactionReceipt": map[string]any{
+			"status":          "0x0",
+			"gasUsed":         "0x7918",
+			"blockNumber":     "0x10",
+			"contractAddress": nil,
+		},
+		"eth_call": rpcFailure{
+			Code:    3,
+			Message: "execution reverted",
+			Data:    "0xdc776dc4",
+		},
+	})
+	probe := chain.NewRPCProbe(
+		"http://arcdoctor.test",
+		chain.WithHTTPClient(httpClient),
+	)
+
+	snapshot, err := probe.TransactionSnapshot(context.Background(), hash)
+	if err != nil {
+		t.Fatalf("TransactionSnapshot() error = %v", err)
+	}
+	if snapshot.Receipt == nil || snapshot.Receipt.Status != 0 {
+		t.Fatalf("Receipt = %#v, want reverted", snapshot.Receipt)
+	}
+	if snapshot.Replay.Status != "reverted" {
+		t.Errorf("Replay.Status = %q, want reverted", snapshot.Replay.Status)
+	}
+	if snapshot.Replay.BlockNumber != 15 {
+		t.Errorf("Replay.BlockNumber = %d, want 15", snapshot.Replay.BlockNumber)
+	}
+	if got := string(snapshot.Replay.RevertData); got != string([]byte{0xdc, 0x77, 0x6d, 0xc4}) {
+		t.Errorf("Replay.RevertData = %x, want dc776dc4", snapshot.Replay.RevertData)
 	}
 }

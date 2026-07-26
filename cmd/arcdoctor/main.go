@@ -16,7 +16,11 @@ import (
 func main() {
 	factory := func(rpcURL string) cli.Diagnoser {
 		probe := chain.NewRPCProbe(rpcURL)
-		return doctor.New(probe, doctor.WithAddressProbe(probe))
+		return doctor.New(
+			probe,
+			doctor.WithAddressProbe(probe),
+			doctor.WithTransactionProbe(probe),
+		)
 	}
 	os.Exit(execute(os.Args[1:], os.Stdout, os.Stderr, factory))
 }

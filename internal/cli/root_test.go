@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -200,5 +202,72 @@ func TestInspectAddressWritesJSONReport(t *testing.T) {
 	}
 	if report.Address.Kind != doctor.AddressKindContract {
 		t.Errorf("Address.Kind = %q, want %q", report.Address.Kind, doctor.AddressKindContract)
+	}
+}
+
+func TestInspectTransactionLoadsABIAndWritesJSONReport(t *testing.T) {
+	t.Parallel()
+
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	abiPath := filepath.Join(t.TempDir(), "Auction.json")
+	if err := os.WriteFile(
+		abiPath,
+		[]byte(`[{"type":"error","name":"InvalidAuctionData","inputs":[]}]`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write ABI fixture: %v", err)
+	}
+
+	factory := func(string) cli.Diagnoser {
+		return diagnoserFunc(func(
+			_ context.Context,
+			request doctor.Request,
+		) (doctor.Report, error) {
+			if request.Kind != doctor.TransactionCheck {
+				t.Errorf("request.Kind = %q, want %q", request.Kind, doctor.TransactionCheck)
+			}
+			if len(request.ABIs) != 1 {
+				t.Fatalf("len(request.ABIs) = %d, want 1", len(request.ABIs))
+			}
+			if request.ABIs[0].Name != "Auction.json" {
+				t.Errorf("ABI name = %q, want Auction.json", request.ABIs[0].Name)
+			}
+			return doctor.Report{
+				Transaction: &doctor.TransactionEvidence{
+					Hash:           target,
+					State:          doctor.TransactionStateReverted,
+					ValueBaseUnits: "0",
+					InputData:      "0x",
+					ExplorerURL:    "https://testnet.arcscan.app/tx/" + target,
+				},
+				Findings: []doctor.Finding{
+					{
+						Code:       "ARC-TX-004",
+						Severity:   doctor.SeverityError,
+						Confidence: doctor.ConfidenceCertain,
+						Title:      "Transaction reverted",
+					},
+				},
+			}, nil
+		})
+	}
+
+	var stdout bytes.Buffer
+	command := cli.NewRootCommand(factory)
+	command.SetOut(&stdout)
+	command.SetArgs([]string{"inspect", target, "--abi", abiPath, "--json"})
+
+	err := command.ExecuteContext(context.Background())
+	if !errors.Is(err, cli.ErrDiagnosticFindings) {
+		t.Fatalf("ExecuteContext() error = %v, want ErrDiagnosticFindings", err)
+	}
+
+	var report doctor.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode JSON output: %v\noutput: %s", err, stdout.String())
+	}
+	if report.Transaction == nil ||
+		report.Transaction.State != doctor.TransactionStateReverted {
+		t.Fatalf("Transaction = %#v, want reverted evidence", report.Transaction)
 	}
 }

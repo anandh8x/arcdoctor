@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/anandh8x/arcdoctor/internal/doctor"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/cobra"
 )
 
@@ -61,6 +64,7 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 		inspectRPCURL  string
 		inspectAsJSON  bool
 		inspectTimeout time.Duration
+		inspectABIs    []string
 	)
 	inspect := &cobra.Command{
 		Use:   "inspect <address>",
@@ -70,9 +74,22 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 			ctx, cancel := context.WithTimeout(command.Context(), inspectTimeout)
 			defer cancel()
 
+			kind := doctor.AddressCheck
+			var abiInputs []doctor.ABIInput
+			looksLikeTransactionHash := len(args[0]) == 66 &&
+				strings.HasPrefix(strings.ToLower(args[0]), "0x")
+			if common.IsHexHash(args[0]) || looksLikeTransactionHash || len(inspectABIs) > 0 {
+				kind = doctor.TransactionCheck
+				var err error
+				abiInputs, err = readABIInputs(inspectABIs)
+				if err != nil {
+					return err
+				}
+			}
 			report, err := factory(inspectRPCURL).Diagnose(ctx, doctor.Request{
-				Kind:   doctor.AddressCheck,
+				Kind:   kind,
 				Target: args[0],
+				ABIs:   abiInputs,
 			})
 			if err != nil {
 				return err
@@ -98,9 +115,30 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 		10*time.Second,
 		"diagnostic timeout",
 	)
+	inspect.Flags().StringSliceVar(
+		&inspectABIs,
+		"abi",
+		nil,
+		"Solidity ABI or artifact JSON file (repeatable)",
+	)
 
 	root.AddCommand(check, inspect)
 	return root
+}
+
+func readABIInputs(paths []string) ([]doctor.ABIInput, error) {
+	inputs := make([]doctor.ABIInput, 0, len(paths))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read ABI file %q: %w", path, err)
+		}
+		inputs = append(inputs, doctor.ABIInput{
+			Name: filepath.Base(path),
+			Data: data,
+		})
+	}
+	return inputs, nil
 }
 
 func writeReport(writer io.Writer, report doctor.Report, asJSON bool) error {
@@ -152,6 +190,62 @@ func renderTerminal(writer io.Writer, report doctor.Report) error {
 			report.Address.ExplorerURL,
 		); err != nil {
 			return fmt.Errorf("write address report: %w", err)
+		}
+	}
+
+	if report.Transaction != nil {
+		transaction := report.Transaction
+		if _, err := fmt.Fprintf(
+			writer,
+			"\nTransaction:  %s\nState:        %s\nFrom:         %s\nTo:           %s\nValue:        %s base units\nGas limit:    %d\nType:         %d\nExplorer:     %s\n",
+			transaction.Hash,
+			transaction.State,
+			transaction.From,
+			transaction.To,
+			transaction.ValueBaseUnits,
+			transaction.GasLimit,
+			transaction.Type,
+			transaction.ExplorerURL,
+		); err != nil {
+			return fmt.Errorf("write transaction report: %w", err)
+		}
+		if transaction.BlockNumber != nil {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Block:        %d\n",
+				*transaction.BlockNumber,
+			); err != nil {
+				return fmt.Errorf("write transaction block: %w", err)
+			}
+		}
+		if transaction.GasUsed != nil {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Gas used:     %d\n",
+				*transaction.GasUsed,
+			); err != nil {
+				return fmt.Errorf("write transaction gas use: %w", err)
+			}
+		}
+		if transaction.Call != nil {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Function:     %s\nABI source:   %s\n",
+				transaction.Call.Signature,
+				transaction.Call.Source,
+			); err != nil {
+				return fmt.Errorf("write decoded call: %w", err)
+			}
+		}
+		if transaction.Revert != nil {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Revert:       %s\nRaw data:     %s\n",
+				transaction.Revert.Signature,
+				transaction.Revert.RawData,
+			); err != nil {
+				return fmt.Errorf("write revert evidence: %w", err)
+			}
 		}
 	}
 

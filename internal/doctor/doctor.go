@@ -14,22 +14,32 @@ const ArcTestnetChainID uint64 = 5_042_002
 
 const ArcTestnetExplorerURL = "https://testnet.arcscan.app"
 
+const ArcTestnetStaleBlockThreshold = 2 * time.Minute
+
 type RequestKind string
 
 const (
-	NetworkCheck RequestKind = "network"
-	AddressCheck RequestKind = "address"
+	NetworkCheck     RequestKind = "network"
+	AddressCheck     RequestKind = "address"
+	TransactionCheck RequestKind = "transaction"
 )
+
+type ABIInput struct {
+	Name string
+	Data []byte
+}
 
 type Request struct {
 	Kind   RequestKind
 	Target string
+	ABIs   []ABIInput
 }
 
 type NetworkSnapshot struct {
 	ChainID        uint64
 	BlockNumber    uint64
 	BlockTimestamp time.Time
+	ObservedAt     time.Time
 	Latency        time.Duration
 }
 
@@ -92,9 +102,10 @@ type Finding struct {
 }
 
 type Report struct {
-	Network  NetworkEvidence  `json:"network"`
-	Address  *AddressEvidence `json:"address,omitempty"`
-	Findings []Finding        `json:"findings"`
+	Network     NetworkEvidence      `json:"network"`
+	Address     *AddressEvidence     `json:"address,omitempty"`
+	Transaction *TransactionEvidence `json:"transaction,omitempty"`
+	Findings    []Finding            `json:"findings"`
 }
 
 func (r Report) HasErrors() bool {
@@ -114,9 +125,14 @@ type AddressProbe interface {
 	AddressSnapshot(context.Context, string) (AddressSnapshot, error)
 }
 
+type TransactionProbe interface {
+	TransactionSnapshot(context.Context, string) (TransactionSnapshot, error)
+}
+
 type Doctor struct {
-	network NetworkProbe
-	address AddressProbe
+	network     NetworkProbe
+	address     AddressProbe
+	transaction TransactionProbe
 }
 
 type Option func(*Doctor)
@@ -124,6 +140,12 @@ type Option func(*Doctor)
 func WithAddressProbe(address AddressProbe) Option {
 	return func(instance *Doctor) {
 		instance.address = address
+	}
+}
+
+func WithTransactionProbe(transaction TransactionProbe) Option {
+	return func(instance *Doctor) {
+		instance.transaction = transaction
 	}
 }
 
@@ -160,6 +182,15 @@ func (d *Doctor) Diagnose(ctx context.Context, request Request) (Report, error) 
 			}, nil
 		}
 		return d.diagnoseAddress(ctx, common.HexToAddress(request.Target).Hex())
+	case TransactionCheck:
+		if len(request.Target) != 66 || !common.IsHexHash(request.Target) {
+			return malformedTransactionReport(request.Target), nil
+		}
+		return d.diagnoseTransaction(
+			ctx,
+			common.HexToHash(request.Target).Hex(),
+			request.ABIs,
+		)
 	default:
 		return Report{}, fmt.Errorf("unsupported diagnostic request kind %q", request.Kind)
 	}
@@ -263,6 +294,28 @@ func (d *Doctor) diagnoseNetwork(ctx context.Context) (Report, error) {
 		}
 	}
 
+	findings := []Finding{finding}
+	if snapshot.ChainID == ArcTestnetChainID &&
+		!snapshot.ObservedAt.IsZero() &&
+		snapshot.ObservedAt.Sub(snapshot.BlockTimestamp) > ArcTestnetStaleBlockThreshold {
+		findings = append(findings, Finding{
+			Code:        "ARC-NET-003",
+			Severity:    SeverityWarning,
+			Confidence:  ConfidenceCertain,
+			Title:       "Latest block appears stale",
+			Explanation: "The latest block timestamp is older than Arc Doctor's freshness threshold at the time of observation.",
+			Evidence: []string{
+				fmt.Sprintf("Latest block timestamp: %s", snapshot.BlockTimestamp.Format(time.RFC3339)),
+				fmt.Sprintf("Observed at: %s", snapshot.ObservedAt.Format(time.RFC3339)),
+				fmt.Sprintf("Freshness threshold: %s", ArcTestnetStaleBlockThreshold),
+			},
+			SuggestedActions: []string{
+				"Compare the endpoint with another Arc Testnet RPC endpoint.",
+				"Check the Arc Testnet service status before retrying.",
+			},
+		})
+	}
+
 	report := Report{
 		Network: NetworkEvidence{
 			ExpectedChainID:     ArcTestnetChainID,
@@ -272,7 +325,7 @@ func (d *Doctor) diagnoseNetwork(ctx context.Context) (Report, error) {
 			Latency:             snapshot.Latency,
 			LatencyMilliseconds: float64(snapshot.Latency) / float64(time.Millisecond),
 		},
-		Findings: []Finding{finding},
+		Findings: findings,
 	}
 
 	return report, nil

@@ -130,6 +130,41 @@ func TestDiagnosePreservesRPCFailureAsOperationalError(t *testing.T) {
 	}
 }
 
+func TestDiagnoseWarnsWhenLatestArcBlockIsStale(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, time.July, 26, 12, 5, 0, 0, time.UTC)
+	probe := networkProbeFunc(func(context.Context) (doctor.NetworkSnapshot, error) {
+		return doctor.NetworkSnapshot{
+			ChainID:        doctor.ArcTestnetChainID,
+			BlockNumber:    54_201_392,
+			BlockTimestamp: observedAt.Add(-3 * time.Minute),
+			ObservedAt:     observedAt,
+			Latency:        42 * time.Millisecond,
+		}, nil
+	})
+
+	report, err := doctor.New(probe).Diagnose(context.Background(), doctor.Request{
+		Kind: doctor.NetworkCheck,
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if len(report.Findings) != 2 {
+		t.Fatalf("len(Findings) = %d, want network and stale findings", len(report.Findings))
+	}
+	if report.Findings[1].Code != "ARC-NET-003" {
+		t.Errorf("stale finding code = %q, want ARC-NET-003", report.Findings[1].Code)
+	}
+	if report.Findings[1].Severity != doctor.SeverityWarning {
+		t.Errorf(
+			"stale finding severity = %q, want %q",
+			report.Findings[1].Severity,
+			doctor.SeverityWarning,
+		)
+	}
+}
+
 func TestDiagnoseAddressRejectsMalformedTargetBeforeRPC(t *testing.T) {
 	t.Parallel()
 

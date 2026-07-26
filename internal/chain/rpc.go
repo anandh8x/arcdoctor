@@ -2,12 +2,14 @@ package chain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"time"
 
 	"github.com/anandh8x/arcdoctor/internal/doctor"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -75,6 +77,7 @@ func (p *RPCProbe) NetworkSnapshot(ctx context.Context) (doctor.NetworkSnapshot,
 		ChainID:        uint64(chainID),
 		BlockNumber:    uint64(blockNumber),
 		BlockTimestamp: time.Unix(int64(block.Timestamp), 0).UTC(),
+		ObservedAt:     time.Now().UTC(),
 		Latency:        time.Since(startedAt),
 	}, nil
 }
@@ -115,4 +118,177 @@ func (p *RPCProbe) AddressSnapshot(
 		Nonce:            uint64(nonce),
 		Code:             append([]byte(nil), code...),
 	}, nil
+}
+
+type rpcTransaction struct {
+	Hash        common.Hash     `json:"hash"`
+	From        common.Address  `json:"from"`
+	To          *common.Address `json:"to"`
+	Value       *hexutil.Big    `json:"value"`
+	Input       hexutil.Bytes   `json:"input"`
+	Gas         hexutil.Uint64  `json:"gas"`
+	Type        hexutil.Uint64  `json:"type"`
+	BlockNumber *hexutil.Uint64 `json:"blockNumber"`
+}
+
+type rpcReceipt struct {
+	Status          hexutil.Uint64  `json:"status"`
+	GasUsed         hexutil.Uint64  `json:"gasUsed"`
+	BlockNumber     hexutil.Uint64  `json:"blockNumber"`
+	ContractAddress *common.Address `json:"contractAddress"`
+}
+
+func (p *RPCProbe) TransactionSnapshot(
+	ctx context.Context,
+	hash string,
+) (doctor.TransactionSnapshot, error) {
+	client, err := rpc.DialOptions(ctx, p.url, rpc.WithHTTPClient(p.httpClient))
+	if err != nil {
+		return doctor.TransactionSnapshot{}, fmt.Errorf("connect to RPC endpoint: %w", err)
+	}
+	defer client.Close()
+
+	var transaction *rpcTransaction
+	if err := client.CallContext(
+		ctx,
+		&transaction,
+		"eth_getTransactionByHash",
+		hash,
+	); err != nil {
+		return doctor.TransactionSnapshot{}, fmt.Errorf("read transaction: %w", err)
+	}
+	if transaction == nil {
+		return doctor.TransactionSnapshot{Found: false}, nil
+	}
+
+	snapshot := doctor.TransactionSnapshot{
+		Found:    true,
+		From:     transaction.From.Hex(),
+		Input:    append([]byte(nil), transaction.Input...),
+		GasLimit: uint64(transaction.Gas),
+		Type:     uint8(transaction.Type),
+	}
+	if transaction.To != nil {
+		snapshot.To = transaction.To.Hex()
+	}
+	if transaction.Value != nil {
+		snapshot.ValueBaseUnits = new(big.Int).Set((*big.Int)(transaction.Value))
+	} else {
+		snapshot.ValueBaseUnits = new(big.Int)
+	}
+	if transaction.BlockNumber != nil {
+		blockNumber := uint64(*transaction.BlockNumber)
+		snapshot.BlockNumber = &blockNumber
+	}
+
+	var receipt *rpcReceipt
+	if err := client.CallContext(
+		ctx,
+		&receipt,
+		"eth_getTransactionReceipt",
+		hash,
+	); err != nil {
+		return doctor.TransactionSnapshot{}, fmt.Errorf("read transaction receipt: %w", err)
+	}
+	if receipt == nil {
+		return snapshot, nil
+	}
+
+	snapshot.Receipt = &doctor.TransactionReceiptSnapshot{
+		Status:          uint64(receipt.Status),
+		GasUsed:         uint64(receipt.GasUsed),
+		BlockNumber:     uint64(receipt.BlockNumber),
+		ContractAddress: addressPointerString(receipt.ContractAddress),
+	}
+	if snapshot.BlockNumber == nil {
+		blockNumber := uint64(receipt.BlockNumber)
+		snapshot.BlockNumber = &blockNumber
+	}
+	if uint64(receipt.Status) == 0 {
+		snapshot.Replay = replayTransaction(ctx, client, transaction, uint64(receipt.BlockNumber))
+	}
+
+	return snapshot, nil
+}
+
+func replayTransaction(
+	ctx context.Context,
+	client *rpc.Client,
+	transaction *rpcTransaction,
+	blockNumber uint64,
+) doctor.ReplaySnapshot {
+	if blockNumber == 0 {
+		return doctor.ReplaySnapshot{
+			Status: doctor.ReplayStatusInconclusive,
+			Detail: "transaction was included in block zero",
+		}
+	}
+
+	call := map[string]any{
+		"from":  transaction.From.Hex(),
+		"gas":   hexutil.EncodeUint64(uint64(transaction.Gas)),
+		"value": hexutil.EncodeBig(transactionValue(transaction)),
+		"data":  hexutil.Encode(transaction.Input),
+	}
+	if transaction.To != nil {
+		call["to"] = transaction.To.Hex()
+	}
+
+	replayBlock := blockNumber - 1
+	var result hexutil.Bytes
+	err := client.CallContext(
+		ctx,
+		&result,
+		"eth_call",
+		call,
+		hexutil.EncodeUint64(replayBlock),
+	)
+	if err == nil {
+		return doctor.ReplaySnapshot{
+			Status:      doctor.ReplayStatusSucceeded,
+			BlockNumber: replayBlock,
+		}
+	}
+	if data, ok := revertErrorData(err); ok {
+		return doctor.ReplaySnapshot{
+			Status:      doctor.ReplayStatusReverted,
+			BlockNumber: replayBlock,
+			RevertData:  append([]byte(nil), data...),
+		}
+	}
+	return doctor.ReplaySnapshot{
+		Status:      doctor.ReplayStatusUnavailable,
+		BlockNumber: replayBlock,
+		Detail:      err.Error(),
+	}
+}
+
+func revertErrorData(err error) ([]byte, bool) {
+	var dataError rpc.DataError
+	if !errors.As(err, &dataError) {
+		return nil, false
+	}
+	data, ok := dataError.ErrorData().(string)
+	if !ok {
+		return nil, false
+	}
+	decoded, decodeErr := hexutil.Decode(data)
+	if decodeErr != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func transactionValue(transaction *rpcTransaction) *big.Int {
+	if transaction.Value == nil {
+		return new(big.Int)
+	}
+	return (*big.Int)(transaction.Value)
+}
+
+func addressPointerString(address *common.Address) string {
+	if address == nil || *address == (common.Address{}) {
+		return ""
+	}
+	return address.Hex()
 }
