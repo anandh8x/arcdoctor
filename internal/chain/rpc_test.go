@@ -148,6 +148,29 @@ func TestRPCProbeCollectsAddressEvidence(t *testing.T) {
 	}
 }
 
+func TestRPCProbeCollectsBytecodeWithoutOtherAddressCalls(t *testing.T) {
+	t.Parallel()
+
+	httpClient := rpcHTTPClient(t, map[string]any{
+		"eth_getCode": "0x60006000",
+	})
+	probe := chain.NewRPCProbe(
+		"http://arcdoctor.test",
+		chain.WithHTTPClient(httpClient),
+	)
+
+	code, err := probe.Bytecode(
+		context.Background(),
+		"0xCe084c9358FBC5200415012885c2F0F0906d400C",
+	)
+	if err != nil {
+		t.Fatalf("Bytecode() error = %v", err)
+	}
+	if got, want := string(code), string([]byte{0x60, 0x00, 0x60, 0x00}); got != want {
+		t.Errorf("Code = %x, want %x", code, []byte(want))
+	}
+}
+
 func TestRPCProbeCollectsSuccessfulTransactionEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -246,5 +269,56 @@ func TestRPCProbeReplaysRevertedTransactionAtParentBlock(t *testing.T) {
 	}
 	if got := string(snapshot.Replay.RevertData); got != string([]byte{0xdc, 0x77, 0x6d, 0xc4}) {
 		t.Errorf("Replay.RevertData = %x, want dc776dc4", snapshot.Replay.RevertData)
+	}
+}
+
+func TestRPCProbeRetriesArcRequestLimitResponses(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			attempts++
+			var rpcRequestValue rpcRequest
+			if err := json.NewDecoder(request.Body).Decode(&rpcRequestValue); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+
+			recorder := httptest.NewRecorder()
+			recorder.Header().Set("Content-Type", "application/json")
+			response := rpcResponse{
+				JSONRPC: "2.0",
+				ID:      rpcRequestValue.ID,
+			}
+			if attempts == 1 {
+				response.Error = rpcFailure{
+					Code:    -32011,
+					Message: "request limit reached",
+				}
+			} else {
+				response.Result = "0x6001"
+			}
+			if err := json.NewEncoder(recorder).Encode(response); err != nil {
+				t.Fatalf("encode response: %v", err)
+			}
+			return recorder.Result(), nil
+		}),
+	}
+
+	code, err := chain.NewRPCProbe(
+		"http://arcdoctor.test",
+		chain.WithHTTPClient(client),
+	).Bytecode(
+		context.Background(),
+		"0x1111111111111111111111111111111111111111",
+	)
+	if err != nil {
+		t.Fatalf("Bytecode() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2", attempts)
+	}
+	if got := string(code); got != string([]byte{0x60, 0x01}) {
+		t.Errorf("code = %x, want 6001", code)
 	}
 }

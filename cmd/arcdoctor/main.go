@@ -19,7 +19,9 @@ func main() {
 		return doctor.New(
 			probe,
 			doctor.WithAddressProbe(probe),
+			doctor.WithBytecodeProbe(probe),
 			doctor.WithTransactionProbe(probe),
+			doctor.WithArtifactLoader(os.ReadFile),
 		)
 	}
 	os.Exit(execute(os.Args[1:], os.Stdout, os.Stderr, factory))

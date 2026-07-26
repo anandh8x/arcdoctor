@@ -271,3 +271,92 @@ func TestInspectTransactionLoadsABIAndWritesJSONReport(t *testing.T) {
 		t.Fatalf("Transaction = %#v, want reverted evidence", report.Transaction)
 	}
 }
+
+func TestDeploymentCommandLoadsManifestAndArtifactOverrides(t *testing.T) {
+	t.Parallel()
+
+	manifestPath := filepath.Join(t.TempDir(), "arc-testnet.json")
+	if err := os.WriteFile(
+		manifestPath,
+		[]byte(`{
+			"schemaVersion": 1,
+			"network": "Arc Testnet",
+			"chainId": 5042002,
+			"contracts": {
+				"Counter": {
+					"address": "0x1111111111111111111111111111111111111111"
+				}
+			}
+		}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write manifest fixture: %v", err)
+	}
+
+	factory := func(string) cli.Diagnoser {
+		return diagnoserFunc(func(
+			_ context.Context,
+			request doctor.Request,
+		) (doctor.Report, error) {
+			if request.Kind != doctor.DeploymentCheck {
+				t.Errorf("request.Kind = %q, want %q", request.Kind, doctor.DeploymentCheck)
+			}
+			if request.Deployment == nil {
+				t.Fatal("request.Deployment is nil")
+			}
+			if request.Deployment.Name != "arc-testnet.json" {
+				t.Errorf(
+					"Deployment.Name = %q, want arc-testnet.json",
+					request.Deployment.Name,
+				)
+			}
+			artifactPath := request.Deployment.Artifacts["Counter"]
+			if !filepath.IsAbs(artifactPath) ||
+				filepath.Base(artifactPath) != "Counter.json" {
+				t.Errorf(
+					"artifact override = %q, want absolute Counter.json path",
+					artifactPath,
+				)
+			}
+			return doctor.Report{
+				Deployment: &doctor.DeploymentEvidence{
+					ManifestName:  "arc-testnet.json",
+					Format:        "arcdoctor",
+					SchemaVersion: 1,
+					Network:       "Arc Testnet",
+					ChainID:       doctor.ArcTestnetChainID,
+				},
+				Findings: []doctor.Finding{
+					{
+						Code:       "ARC-DEP-000",
+						Severity:   doctor.SeverityInfo,
+						Confidence: doctor.ConfidenceCertain,
+						Title:      "Deployment validation completed",
+					},
+				},
+			}, nil
+		})
+	}
+
+	var stdout bytes.Buffer
+	command := cli.NewRootCommand(factory)
+	command.SetOut(&stdout)
+	command.SetArgs([]string{
+		"deployment",
+		manifestPath,
+		"--artifact",
+		"Counter=./out/Counter.json",
+		"--json",
+	})
+
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	var report doctor.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode JSON output: %v\noutput: %s", err, stdout.String())
+	}
+	if report.Deployment == nil || report.Deployment.Format != "arcdoctor" {
+		t.Fatalf("Deployment = %#v, want arcdoctor format", report.Deployment)
+	}
+}

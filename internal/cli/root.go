@@ -18,6 +18,8 @@ import (
 
 const DefaultArcTestnetRPC = "https://rpc.testnet.arc.network"
 
+const maxManifestInputBytes = 1 << 20
+
 var ErrDiagnosticFindings = errors.New("diagnostic errors found")
 
 type Diagnoser interface {
@@ -122,8 +124,114 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 		"Solidity ABI or artifact JSON file (repeatable)",
 	)
 
-	root.AddCommand(check, inspect)
+	var (
+		deploymentRPCURL    string
+		deploymentAsJSON    bool
+		deploymentTimeout   time.Duration
+		deploymentArtifacts []string
+	)
+	deployment := &cobra.Command{
+		Use:   "deployment <manifest>",
+		Short: "Validate an Arc deployment manifest or Foundry broadcast",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			manifestPath, err := filepath.Abs(args[0])
+			if err != nil {
+				return fmt.Errorf("resolve deployment manifest %q: %w", args[0], err)
+			}
+			manifestData, err := readLimitedFile(manifestPath, maxManifestInputBytes)
+			if err != nil {
+				return fmt.Errorf("read deployment manifest %q: %w", args[0], err)
+			}
+			artifacts, err := parseArtifactOverrides(deploymentArtifacts)
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithTimeout(command.Context(), deploymentTimeout)
+			defer cancel()
+			report, err := factory(deploymentRPCURL).Diagnose(ctx, doctor.Request{
+				Kind: doctor.DeploymentCheck,
+				Deployment: &doctor.DeploymentInput{
+					Name:      filepath.Base(manifestPath),
+					BaseDir:   filepath.Dir(manifestPath),
+					Data:      manifestData,
+					Artifacts: artifacts,
+				},
+			})
+			if err != nil {
+				return err
+			}
+			return writeReport(command.OutOrStdout(), report, deploymentAsJSON)
+		},
+	}
+	deployment.Flags().StringVar(
+		&deploymentRPCURL,
+		"rpc",
+		DefaultArcTestnetRPC,
+		"Arc JSON-RPC endpoint",
+	)
+	deployment.Flags().BoolVar(
+		&deploymentAsJSON,
+		"json",
+		false,
+		"write a machine-readable JSON report",
+	)
+	deployment.Flags().DurationVar(
+		&deploymentTimeout,
+		"timeout",
+		30*time.Second,
+		"diagnostic timeout",
+	)
+	deployment.Flags().StringArrayVar(
+		&deploymentArtifacts,
+		"artifact",
+		nil,
+		"contract artifact override in Name=path form (repeatable)",
+	)
+
+	root.AddCommand(check, inspect, deployment)
 	return root
+}
+
+func readLimitedFile(path string, maximum int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maximum {
+		return nil, fmt.Errorf("file exceeds %d bytes", maximum)
+	}
+	return data, nil
+}
+
+func parseArtifactOverrides(values []string) (map[string]string, error) {
+	overrides := make(map[string]string, len(values))
+	for _, value := range values {
+		name, path, ok := strings.Cut(value, "=")
+		if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+			return nil, fmt.Errorf(
+				"invalid --artifact %q: expected Name=path",
+				value,
+			)
+		}
+		name = strings.TrimSpace(name)
+		if _, duplicate := overrides[name]; duplicate {
+			return nil, fmt.Errorf("duplicate --artifact override for %q", name)
+		}
+		resolvedPath, err := filepath.Abs(strings.TrimSpace(path))
+		if err != nil {
+			return nil, fmt.Errorf("resolve artifact path for %q: %w", name, err)
+		}
+		overrides[name] = resolvedPath
+	}
+	return overrides, nil
 }
 
 func readABIInputs(paths []string) ([]doctor.ABIInput, error) {
@@ -245,6 +353,35 @@ func renderTerminal(writer io.Writer, report doctor.Report) error {
 				transaction.Revert.RawData,
 			); err != nil {
 				return fmt.Errorf("write revert evidence: %w", err)
+			}
+		}
+	}
+
+	if report.Deployment != nil {
+		deployment := report.Deployment
+		if _, err := fmt.Fprintf(
+			writer,
+			"\nManifest:     %s\nFormat:       %s\nChain ID:     %d\nContracts:    %d\n",
+			deployment.ManifestName,
+			deployment.Format,
+			deployment.ChainID,
+			len(deployment.Contracts),
+		); err != nil {
+			return fmt.Errorf("write deployment report: %w", err)
+		}
+		for _, contract := range deployment.Contracts {
+			if _, err := fmt.Fprintf(
+				writer,
+				"\nContract:     %s\nAddress:      %s\nBytecode:     %d bytes\nCode hash:    %s\nArtifact:     %s\nComparison:   %s\nExplorer:     %s\n",
+				contract.Name,
+				contract.Address,
+				contract.CodeSize,
+				contract.CodeHash,
+				contract.Artifact,
+				contract.ArtifactComparison,
+				contract.AddressExplorerURL,
+			); err != nil {
+				return fmt.Errorf("write deployment contract: %w", err)
 			}
 		}
 	}

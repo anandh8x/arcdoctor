@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anandh8x/arcdoctor/internal/doctor"
@@ -48,20 +49,21 @@ func (p *RPCProbe) NetworkSnapshot(ctx context.Context) (doctor.NetworkSnapshot,
 	defer client.Close()
 
 	var chainID hexutil.Uint64
-	if err := client.CallContext(ctx, &chainID, "eth_chainId"); err != nil {
+	if err := callContext(ctx, client, &chainID, "eth_chainId"); err != nil {
 		return doctor.NetworkSnapshot{}, fmt.Errorf("read chain ID: %w", err)
 	}
 
 	var blockNumber hexutil.Uint64
-	if err := client.CallContext(ctx, &blockNumber, "eth_blockNumber"); err != nil {
+	if err := callContext(ctx, client, &blockNumber, "eth_blockNumber"); err != nil {
 		return doctor.NetworkSnapshot{}, fmt.Errorf("read latest block number: %w", err)
 	}
 
 	var block *struct {
 		Timestamp hexutil.Uint64 `json:"timestamp"`
 	}
-	if err := client.CallContext(
+	if err := callContext(
 		ctx,
+		client,
 		&block,
 		"eth_getBlockByNumber",
 		hexutil.EncodeUint64(uint64(blockNumber)),
@@ -93,13 +95,14 @@ func (p *RPCProbe) AddressSnapshot(
 	defer client.Close()
 
 	var balance hexutil.Big
-	if err := client.CallContext(ctx, &balance, "eth_getBalance", address, "latest"); err != nil {
+	if err := callContext(ctx, client, &balance, "eth_getBalance", address, "latest"); err != nil {
 		return doctor.AddressSnapshot{}, fmt.Errorf("read address balance: %w", err)
 	}
 
 	var nonce hexutil.Uint64
-	if err := client.CallContext(
+	if err := callContext(
 		ctx,
+		client,
 		&nonce,
 		"eth_getTransactionCount",
 		address,
@@ -109,7 +112,7 @@ func (p *RPCProbe) AddressSnapshot(
 	}
 
 	var code hexutil.Bytes
-	if err := client.CallContext(ctx, &code, "eth_getCode", address, "latest"); err != nil {
+	if err := callContext(ctx, client, &code, "eth_getCode", address, "latest"); err != nil {
 		return doctor.AddressSnapshot{}, fmt.Errorf("read address bytecode: %w", err)
 	}
 
@@ -118,6 +121,20 @@ func (p *RPCProbe) AddressSnapshot(
 		Nonce:            uint64(nonce),
 		Code:             append([]byte(nil), code...),
 	}, nil
+}
+
+func (p *RPCProbe) Bytecode(ctx context.Context, address string) ([]byte, error) {
+	client, err := rpc.DialOptions(ctx, p.url, rpc.WithHTTPClient(p.httpClient))
+	if err != nil {
+		return nil, fmt.Errorf("connect to RPC endpoint: %w", err)
+	}
+	defer client.Close()
+
+	var code hexutil.Bytes
+	if err := callContext(ctx, client, &code, "eth_getCode", address, "latest"); err != nil {
+		return nil, fmt.Errorf("read address bytecode: %w", err)
+	}
+	return append([]byte(nil), code...), nil
 }
 
 type rpcTransaction struct {
@@ -149,8 +166,9 @@ func (p *RPCProbe) TransactionSnapshot(
 	defer client.Close()
 
 	var transaction *rpcTransaction
-	if err := client.CallContext(
+	if err := callContext(
 		ctx,
+		client,
 		&transaction,
 		"eth_getTransactionByHash",
 		hash,
@@ -182,8 +200,9 @@ func (p *RPCProbe) TransactionSnapshot(
 	}
 
 	var receipt *rpcReceipt
-	if err := client.CallContext(
+	if err := callContext(
 		ctx,
+		client,
 		&receipt,
 		"eth_getTransactionReceipt",
 		hash,
@@ -236,8 +255,9 @@ func replayTransaction(
 
 	replayBlock := blockNumber - 1
 	var result hexutil.Bytes
-	err := client.CallContext(
+	err := callContext(
 		ctx,
+		client,
 		&result,
 		"eth_call",
 		call,
@@ -277,6 +297,47 @@ func revertErrorData(err error) ([]byte, bool) {
 		return nil, false
 	}
 	return decoded, true
+}
+
+func callContext(
+	ctx context.Context,
+	client *rpc.Client,
+	result any,
+	method string,
+	args ...any,
+) error {
+	delays := [...]time.Duration{
+		300 * time.Millisecond,
+		750 * time.Millisecond,
+		1500 * time.Millisecond,
+	}
+	var err error
+	for attempt := 0; ; attempt++ {
+		err = client.CallContext(ctx, result, method, args...)
+		if err == nil || !isRateLimitError(err) || attempt == len(delays) {
+			return err
+		}
+		timer := time.NewTimer(delays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func isRateLimitError(err error) bool {
+	var rpcError rpc.Error
+	if errors.As(err, &rpcError) {
+		if rpcError.ErrorCode() == -32011 || rpcError.ErrorCode() == -32005 {
+			return true
+		}
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "request limit") ||
+		strings.Contains(message, "too many requests")
 }
 
 func transactionValue(transaction *rpcTransaction) *big.Int {

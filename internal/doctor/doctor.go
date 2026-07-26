@@ -22,6 +22,7 @@ const (
 	NetworkCheck     RequestKind = "network"
 	AddressCheck     RequestKind = "address"
 	TransactionCheck RequestKind = "transaction"
+	DeploymentCheck  RequestKind = "deployment"
 )
 
 type ABIInput struct {
@@ -30,9 +31,10 @@ type ABIInput struct {
 }
 
 type Request struct {
-	Kind   RequestKind
-	Target string
-	ABIs   []ABIInput
+	Kind       RequestKind
+	Target     string
+	ABIs       []ABIInput
+	Deployment *DeploymentInput
 }
 
 type NetworkSnapshot struct {
@@ -105,6 +107,7 @@ type Report struct {
 	Network     NetworkEvidence      `json:"network"`
 	Address     *AddressEvidence     `json:"address,omitempty"`
 	Transaction *TransactionEvidence `json:"transaction,omitempty"`
+	Deployment  *DeploymentEvidence  `json:"deployment,omitempty"`
 	Findings    []Finding            `json:"findings"`
 }
 
@@ -125,14 +128,22 @@ type AddressProbe interface {
 	AddressSnapshot(context.Context, string) (AddressSnapshot, error)
 }
 
+type BytecodeProbe interface {
+	Bytecode(context.Context, string) ([]byte, error)
+}
+
 type TransactionProbe interface {
 	TransactionSnapshot(context.Context, string) (TransactionSnapshot, error)
 }
 
+type ArtifactLoader func(string) ([]byte, error)
+
 type Doctor struct {
-	network     NetworkProbe
-	address     AddressProbe
-	transaction TransactionProbe
+	network      NetworkProbe
+	address      AddressProbe
+	bytecode     BytecodeProbe
+	transaction  TransactionProbe
+	loadArtifact ArtifactLoader
 }
 
 type Option func(*Doctor)
@@ -143,9 +154,21 @@ func WithAddressProbe(address AddressProbe) Option {
 	}
 }
 
+func WithBytecodeProbe(bytecode BytecodeProbe) Option {
+	return func(instance *Doctor) {
+		instance.bytecode = bytecode
+	}
+}
+
 func WithTransactionProbe(transaction TransactionProbe) Option {
 	return func(instance *Doctor) {
 		instance.transaction = transaction
+	}
+}
+
+func WithArtifactLoader(loader ArtifactLoader) Option {
+	return func(instance *Doctor) {
+		instance.loadArtifact = loader
 	}
 }
 
@@ -191,6 +214,11 @@ func (d *Doctor) Diagnose(ctx context.Context, request Request) (Report, error) 
 			common.HexToHash(request.Target).Hex(),
 			request.ABIs,
 		)
+	case DeploymentCheck:
+		if request.Deployment == nil {
+			return Report{}, fmt.Errorf("deployment input is required")
+		}
+		return d.diagnoseDeployment(ctx, *request.Deployment)
 	default:
 		return Report{}, fmt.Errorf("unsupported diagnostic request kind %q", request.Kind)
 	}

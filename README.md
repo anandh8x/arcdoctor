@@ -21,6 +21,12 @@ It collects evidence from Arc RPC responses and turns common network problems in
 - Decode `Error(string)`, `Panic(uint256)`, and ABI-backed custom errors
 - Replay failed calls against historical state when the RPC endpoint supports it
 - Preserve raw revert data and report unavailable or inconclusive replay honestly
+- Validate Arc deployment manifests and Foundry broadcast JSON
+- Detect wrong chain metadata, malformed and duplicate addresses, missing bytecode,
+  failed deployment transactions, and familiar local development addresses
+- Compare deployed runtime bytecode with Foundry artifacts
+- Normalize declared immutable slots, linked-library slots, and Solidity metadata
+  before reporting a bytecode mismatch
 - Produce readable terminal output or machine-readable JSON
 - Redact credentials from operational error messages
 - Return distinct exit codes for healthy, diagnostic-error, and operational-error outcomes
@@ -81,6 +87,23 @@ go run ./cmd/arcdoctor inspect 0xTRANSACTION_HASH --abi ./out/Contract.sol/Contr
 Repeat `--abi` to provide more than one candidate. If selector matches conflict,
 Arc Doctor reports the ambiguity and does not guess.
 
+Validate a deployment manifest:
+
+```bash
+go run ./cmd/arcdoctor deployment ./deployments/arc-testnet.json
+```
+
+Compare configured contracts with local Foundry artifacts:
+
+```bash
+go run ./cmd/arcdoctor deployment ./deployments/arc-testnet.json \
+  --artifact InvoiceRegistry=./out/InvoiceRegistry.sol/InvoiceRegistry.json \
+  --artifact SealedBidAuction=./out/SealedBidAuction.sol/SealedBidAuction.json
+```
+
+The same command accepts a Foundry `run-latest.json` broadcast file. Artifact
+overrides use `ContractName=path` and can be repeated.
+
 ## Example
 
 ```text
@@ -133,9 +156,9 @@ go build -o arcdoctor ./cmd/arcdoctor
 
 ## Scope
 
-The current implementation covers network, address, transaction, and ABI-backed
-error diagnosis. Deployment verification and shareable report workflows will be
-added as their behavior is tested.
+The current implementation covers network, address, transaction, ABI-backed
+error, and deployment diagnosis. Shareable report workflows and the guided
+terminal interface will be added as their behavior is tested.
 
 Arc Doctor is a community-built tool and is not affiliated with or endorsed by Circle.
 
