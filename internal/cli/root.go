@@ -40,7 +40,7 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "arcdoctor",
 		Short:         "Evidence-based diagnostics for Arc Testnet",
-		Version:       buildinfo.Version,
+		Version:       buildinfo.ResolvedVersion(),
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(command *cobra.Command, _ []string) error {

@@ -312,7 +312,7 @@ func (d *Doctor) finalizeReport(report Report) Report {
 	report.Sanitized = true
 	report.Tool = ToolEvidence{
 		Name:           "Arc Doctor",
-		Version:        buildinfo.Version,
+		Version:        buildinfo.ResolvedVersion(),
 		Commit:         buildinfo.Commit,
 		RulesetVersion: buildinfo.RulesetVersion,
 	}
