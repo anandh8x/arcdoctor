@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anandh8x/arcdoctor/internal/buildinfo"
 	"github.com/anandh8x/arcdoctor/internal/doctor"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/cobra"
@@ -19,6 +21,8 @@ import (
 const DefaultArcTestnetRPC = "https://rpc.testnet.arc.network"
 
 const maxManifestInputBytes = 1 << 20
+
+const maxReportInputBytes = 16 << 20
 
 var ErrDiagnosticFindings = errors.New("diagnostic errors found")
 
@@ -32,9 +36,11 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "arcdoctor",
 		Short:         "Evidence-based diagnostics for Arc Testnet",
+		Version:       buildinfo.Version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
+	root.SetVersionTemplate("Arc Doctor {{.Version}}\n")
 
 	var (
 		rpcURL  string
@@ -190,8 +196,131 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 		"contract artifact override in Name=path form (repeatable)",
 	)
 
-	root.AddCommand(check, inspect, deployment)
+	var (
+		reportFormat string
+		reportOutput string
+		reportForce  bool
+	)
+	reportCommand := &cobra.Command{
+		Use:   "report <input>",
+		Short: "Sanitize and export an Arc Doctor JSON report",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			data, err := readReportInput(command, args[0])
+			if err != nil {
+				return err
+			}
+			var report doctor.Report
+			decoder := json.NewDecoder(bytes.NewReader(data))
+			if err := decoder.Decode(&report); err != nil {
+				return fmt.Errorf("decode report JSON: %w", err)
+			}
+			var trailing any
+			if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+				if err == nil {
+					return fmt.Errorf("decode report JSON: multiple JSON values")
+				}
+				return fmt.Errorf("decode report JSON: %w", err)
+			}
+			if report.SchemaVersion != 1 {
+				return fmt.Errorf(
+					"unsupported report schema version %d",
+					report.SchemaVersion,
+				)
+			}
+			report = doctor.SanitizeReport(report)
+
+			var rendered bytes.Buffer
+			switch reportFormat {
+			case "json":
+				encoder := json.NewEncoder(&rendered)
+				encoder.SetIndent("", "  ")
+				err = encoder.Encode(report)
+			case "text":
+				err = renderTerminal(&rendered, report)
+			default:
+				return fmt.Errorf(
+					"unsupported report format %q: use json or text",
+					reportFormat,
+				)
+			}
+			if err != nil {
+				return err
+			}
+			if reportOutput == "" {
+				_, err = command.OutOrStdout().Write(rendered.Bytes())
+				return err
+			}
+
+			flags := os.O_WRONLY | os.O_CREATE
+			if reportForce {
+				flags |= os.O_TRUNC
+			} else {
+				flags |= os.O_EXCL
+			}
+			outputFile, err := os.OpenFile(reportOutput, flags, 0o600)
+			if err != nil {
+				return fmt.Errorf("create report output %q: %w", reportOutput, err)
+			}
+			if _, err := outputFile.Write(rendered.Bytes()); err != nil {
+				_ = outputFile.Close()
+				return fmt.Errorf("write report output: %w", err)
+			}
+			if err := outputFile.Sync(); err != nil {
+				_ = outputFile.Close()
+				return fmt.Errorf("sync report output: %w", err)
+			}
+			if err := outputFile.Close(); err != nil {
+				return fmt.Errorf("close report output: %w", err)
+			}
+			return nil
+		},
+	}
+	reportCommand.Flags().StringVar(
+		&reportFormat,
+		"format",
+		"json",
+		"output format: json or text",
+	)
+	reportCommand.Flags().StringVar(
+		&reportOutput,
+		"output",
+		"",
+		"write to a file instead of standard output",
+	)
+	reportCommand.Flags().BoolVar(
+		&reportForce,
+		"force",
+		false,
+		"replace an existing output file",
+	)
+
+	root.AddCommand(check, inspect, deployment, reportCommand)
 	return root
+}
+
+func readReportInput(command *cobra.Command, path string) ([]byte, error) {
+	if path == "-" {
+		data, err := io.ReadAll(io.LimitReader(
+			command.InOrStdin(),
+			maxReportInputBytes+1,
+		))
+		if err != nil {
+			return nil, fmt.Errorf("read report from standard input: %w", err)
+		}
+		if len(data) > maxReportInputBytes {
+			return nil, fmt.Errorf(
+				"report input exceeds %d bytes",
+				maxReportInputBytes,
+			)
+		}
+		return data, nil
+	}
+	data, err := readLimitedFile(path, maxReportInputBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read report input %q: %w", path, err)
+	}
+	return data, nil
 }
 
 func readLimitedFile(path string, maximum int64) ([]byte, error) {
@@ -270,6 +399,18 @@ func writeReport(writer io.Writer, report doctor.Report, asJSON bool) error {
 func renderTerminal(writer io.Writer, report doctor.Report) error {
 	if _, err := fmt.Fprintln(writer, "Arc Doctor"); err != nil {
 		return fmt.Errorf("write report title: %w", err)
+	}
+	if report.SchemaVersion != 0 {
+		if _, err := fmt.Fprintf(
+			writer,
+			"Version:       %s\nRuleset:       %s\nCollected:     %s\nSanitized:     %t\n",
+			report.Tool.Version,
+			report.Tool.RulesetVersion,
+			report.CollectedAt.Format(time.RFC3339),
+			report.Sanitized,
+		); err != nil {
+			return fmt.Errorf("write report metadata: %w", err)
+		}
 	}
 
 	if report.Network.ExpectedChainID != 0 {

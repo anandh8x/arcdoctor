@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "network": "Arc Testnet",
+  "chainId": 5042002,
+  "rpcUrl": "https://rpc.testnet.arc.network",
+  "contracts": {
+    "InvoiceRegistry": {
+      "address": "0xCe084c9358FBC5200415012885c2F0F0906d400C",
+      "transactionHash": "0xaadb9724bd8211ac78cc818465b0f7d144626e4f8dfd99f908e25f2e8609d1c8",
+      "artifact": "../out/InvoiceRegistry.sol/InvoiceRegistry.json"
+    },
+    "SealedBidAuction": {
+      "address": "0x0C83623d0abFca5e7ad6E6179bB45A3E70C6C9DA",
+      "transactionHash": "0x4ac202bc8b1f25e3a4b466051b87a946ebd2ec2efe7782df45e9e3301a566211",
+      "artifact": "../out/SealedBidAuction.sol/SealedBidAuction.json"
+    }
+  }
+}

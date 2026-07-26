@@ -27,6 +27,10 @@ It collects evidence from Arc RPC responses and turns common network problems in
 - Compare deployed runtime bytecode with Foundry artifacts
 - Normalize declared immutable slots, linked-library slots, and Solidity metadata
   before reporting a bytecode mismatch
+- Include schema, collection time, tool version, ruleset version, and per-finding
+  rule versions in every real report
+- Sanitize known secret patterns and unsafe terminal sequences before serialization
+- Re-export existing reports as protected JSON or readable text files
 - Produce readable terminal output or machine-readable JSON
 - Redact credentials from operational error messages
 - Return distinct exit codes for healthy, diagnostic-error, and operational-error outcomes
@@ -104,6 +108,17 @@ go run ./cmd/arcdoctor deployment ./deployments/arc-testnet.json \
 The same command accepts a Foundry `run-latest.json` broadcast file. Artifact
 overrides use `ContractName=path` and can be repeated.
 
+Sanitize and export an existing JSON report:
+
+```bash
+go run ./cmd/arcdoctor report report.json --output shared-report.json
+```
+
+Use `--format text` for a plain-text export. Arc Doctor redaction is a safety
+measure, not a guarantee, so review reports before sharing them. See
+[reporting and redaction](docs/reporting.md) and the
+[diagnostic code reference](docs/diagnostic-codes.md).
+
 ## Example
 
 ```text
@@ -157,8 +172,8 @@ go build -o arcdoctor ./cmd/arcdoctor
 ## Scope
 
 The current implementation covers network, address, transaction, ABI-backed
-error, and deployment diagnosis. Shareable report workflows and the guided
-terminal interface will be added as their behavior is tested.
+error, deployment, and sanitized report workflows. The guided terminal
+interface will be added as its behavior is tested.
 
 Arc Doctor is a community-built tool and is not affiliated with or endorsed by Circle.
 

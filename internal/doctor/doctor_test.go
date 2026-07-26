@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,78 @@ func TestDiagnoseConfirmsArcTestnet(t *testing.T) {
 	}
 	if finding.Confidence != doctor.ConfidenceCertain {
 		t.Errorf("finding.Confidence = %q, want %q", finding.Confidence, doctor.ConfidenceCertain)
+	}
+}
+
+func TestDiagnoseAddsVersionedSanitizedReportMetadata(t *testing.T) {
+	t.Parallel()
+
+	collectedAt := time.Date(2026, time.July, 26, 15, 30, 0, 0, time.UTC)
+	probe := networkProbeFunc(func(context.Context) (doctor.NetworkSnapshot, error) {
+		return doctor.NetworkSnapshot{
+			ChainID:        doctor.ArcTestnetChainID,
+			BlockNumber:    54_201_392,
+			BlockTimestamp: collectedAt.Add(-time.Second),
+			ObservedAt:     collectedAt,
+			Latency:        42 * time.Millisecond,
+		}, nil
+	})
+
+	report, err := doctor.New(
+		probe,
+		doctor.WithClock(func() time.Time { return collectedAt }),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind: doctor.NetworkCheck,
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.SchemaVersion != 1 {
+		t.Errorf("SchemaVersion = %d, want 1", report.SchemaVersion)
+	}
+	if !report.CollectedAt.Equal(collectedAt) {
+		t.Errorf("CollectedAt = %s, want %s", report.CollectedAt, collectedAt)
+	}
+	if !report.Sanitized {
+		t.Error("Sanitized = false, want true")
+	}
+	if report.Tool.Name != "Arc Doctor" ||
+		report.Tool.Version == "" ||
+		report.Tool.RulesetVersion == "" {
+		t.Errorf("Tool = %#v, want complete metadata", report.Tool)
+	}
+	for _, finding := range report.Findings {
+		if finding.RuleVersion == "" {
+			t.Errorf("finding %s has no rule version", finding.Code)
+		}
+	}
+}
+
+func TestDiagnoseSanitizesFindingEvidenceBeforeSerialization(t *testing.T) {
+	t.Parallel()
+
+	privateKey := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	report, err := doctor.New(
+		networkProbeFunc(func(context.Context) (doctor.NetworkSnapshot, error) {
+			t.Fatal("network probe should not be called")
+			return doctor.NetworkSnapshot{}, nil
+		}),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind:   doctor.AddressCheck,
+		Target: "private_key=" + privateKey + "\x1b[31m",
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("len(Findings) = %d, want 1", len(report.Findings))
+	}
+	evidence := strings.Join(report.Findings[0].Evidence, "\n")
+	if strings.Contains(evidence, privateKey) || strings.Contains(evidence, "\x1b") {
+		t.Errorf("finding evidence was not sanitized: %s", evidence)
+	}
+	if !strings.Contains(evidence, "[REDACTED]") {
+		t.Errorf("finding evidence has no redaction marker: %s", evidence)
 	}
 }
 

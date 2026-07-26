@@ -360,3 +360,73 @@ func TestDeploymentCommandLoadsManifestAndArtifactOverrides(t *testing.T) {
 		t.Fatalf("Deployment = %#v, want arcdoctor format", report.Deployment)
 	}
 }
+
+func TestReportCommandSanitizesExistingJSONReport(t *testing.T) {
+	t.Parallel()
+
+	const transactionHash = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const privateKey = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	inputPath := filepath.Join(t.TempDir(), "unsafe-report.json")
+	input := doctor.Report{
+		SchemaVersion: 1,
+		CollectedAt:   time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC),
+		Sanitized:     false,
+		Tool: doctor.ToolEvidence{
+			Name:           "Arc Doctor",
+			Version:        "dev",
+			RulesetVersion: "1.0.0",
+		},
+		Transaction: &doctor.TransactionEvidence{
+			Hash:           transactionHash,
+			State:          doctor.TransactionStateReverted,
+			ValueBaseUnits: "0",
+			InputData:      "0x",
+			ExplorerURL:    "https://testnet.arcscan.app/tx/" + transactionHash,
+		},
+		Findings: []doctor.Finding{
+			{
+				Code:        "ARC-TX-004",
+				Severity:    doctor.SeverityError,
+				Confidence:  doctor.ConfidenceCertain,
+				Title:       "Transaction reverted",
+				Explanation: "private_key=" + privateKey,
+				Evidence: []string{
+					"https://alice:password@rpc.example?token=secret",
+				},
+				RuleVersion: "1.0.0",
+			},
+		},
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal report fixture: %v", err)
+	}
+	if err := os.WriteFile(inputPath, data, 0o600); err != nil {
+		t.Fatalf("write report fixture: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	command := cli.NewRootCommand(healthyFactory())
+	command.SetOut(&stdout)
+	command.SetArgs([]string{"report", inputPath})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	var output doctor.Report
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode report output: %v\noutput: %s", err, stdout.String())
+	}
+	if !output.Sanitized {
+		t.Error("Sanitized = false, want true")
+	}
+	if strings.Contains(stdout.String(), privateKey) ||
+		strings.Contains(stdout.String(), "alice") ||
+		strings.Contains(stdout.String(), "password") ||
+		strings.Contains(stdout.String(), "secret") {
+		t.Errorf("output contains a secret:\n%s", stdout.String())
+	}
+	if output.Transaction == nil || output.Transaction.Hash != transactionHash {
+		t.Errorf("public transaction hash was not preserved: %#v", output.Transaction)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/anandh8x/arcdoctor/internal/buildinfo"
+	"github.com/anandh8x/arcdoctor/internal/redact"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -101,14 +103,27 @@ type Finding struct {
 	Explanation      string     `json:"explanation"`
 	Evidence         []string   `json:"evidence"`
 	SuggestedActions []string   `json:"suggestedActions,omitempty"`
+	RuleVersion      string     `json:"ruleVersion"`
+	Related          string     `json:"related,omitempty"`
+}
+
+type ToolEvidence struct {
+	Name           string `json:"name"`
+	Version        string `json:"version"`
+	Commit         string `json:"commit,omitempty"`
+	RulesetVersion string `json:"rulesetVersion"`
 }
 
 type Report struct {
-	Network     NetworkEvidence      `json:"network"`
-	Address     *AddressEvidence     `json:"address,omitempty"`
-	Transaction *TransactionEvidence `json:"transaction,omitempty"`
-	Deployment  *DeploymentEvidence  `json:"deployment,omitempty"`
-	Findings    []Finding            `json:"findings"`
+	SchemaVersion int                  `json:"schemaVersion"`
+	CollectedAt   time.Time            `json:"collectedAt"`
+	Sanitized     bool                 `json:"sanitized"`
+	Tool          ToolEvidence         `json:"tool"`
+	Network       NetworkEvidence      `json:"network"`
+	Address       *AddressEvidence     `json:"address,omitempty"`
+	Transaction   *TransactionEvidence `json:"transaction,omitempty"`
+	Deployment    *DeploymentEvidence  `json:"deployment,omitempty"`
+	Findings      []Finding            `json:"findings"`
 }
 
 func (r Report) HasErrors() bool {
@@ -144,6 +159,7 @@ type Doctor struct {
 	bytecode     BytecodeProbe
 	transaction  TransactionProbe
 	loadArtifact ArtifactLoader
+	clock        func() time.Time
 }
 
 type Option func(*Doctor)
@@ -172,8 +188,17 @@ func WithArtifactLoader(loader ArtifactLoader) Option {
 	}
 }
 
+func WithClock(clock func() time.Time) Option {
+	return func(instance *Doctor) {
+		instance.clock = clock
+	}
+}
+
 func New(network NetworkProbe, options ...Option) *Doctor {
-	instance := &Doctor{network: network}
+	instance := &Doctor{
+		network: network,
+		clock:   time.Now,
+	}
 	for _, option := range options {
 		option(instance)
 	}
@@ -181,12 +206,14 @@ func New(network NetworkProbe, options ...Option) *Doctor {
 }
 
 func (d *Doctor) Diagnose(ctx context.Context, request Request) (Report, error) {
+	var report Report
+	var err error
 	switch request.Kind {
 	case NetworkCheck:
-		return d.diagnoseNetwork(ctx)
+		report, err = d.diagnoseNetwork(ctx)
 	case AddressCheck:
 		if !common.IsHexAddress(request.Target) {
-			return Report{
+			report = Report{
 				Findings: []Finding{
 					{
 						Code:        "ARC-ADR-001",
@@ -202,26 +229,54 @@ func (d *Doctor) Diagnose(ctx context.Context, request Request) (Report, error) 
 						},
 					},
 				},
-			}, nil
+			}
+			break
 		}
-		return d.diagnoseAddress(ctx, common.HexToAddress(request.Target).Hex())
+		report, err = d.diagnoseAddress(ctx, common.HexToAddress(request.Target).Hex())
 	case TransactionCheck:
 		if len(request.Target) != 66 || !common.IsHexHash(request.Target) {
-			return malformedTransactionReport(request.Target), nil
+			report = malformedTransactionReport(request.Target)
+			break
 		}
-		return d.diagnoseTransaction(
+		report, err = d.diagnoseTransaction(
 			ctx,
 			common.HexToHash(request.Target).Hex(),
 			request.ABIs,
 		)
 	case DeploymentCheck:
 		if request.Deployment == nil {
-			return Report{}, fmt.Errorf("deployment input is required")
+			err = fmt.Errorf("deployment input is required")
+			break
 		}
-		return d.diagnoseDeployment(ctx, *request.Deployment)
+		report, err = d.diagnoseDeployment(ctx, *request.Deployment)
 	default:
-		return Report{}, fmt.Errorf("unsupported diagnostic request kind %q", request.Kind)
+		err = fmt.Errorf("unsupported diagnostic request kind %q", request.Kind)
 	}
+	return d.finalizeReport(report), err
+}
+
+func (d *Doctor) finalizeReport(report Report) Report {
+	report.SchemaVersion = buildinfo.ReportSchemaVersion
+	report.CollectedAt = d.clock().UTC()
+	report.Sanitized = true
+	report.Tool = ToolEvidence{
+		Name:           "Arc Doctor",
+		Version:        buildinfo.Version,
+		Commit:         buildinfo.Commit,
+		RulesetVersion: buildinfo.RulesetVersion,
+	}
+	for index := range report.Findings {
+		if report.Findings[index].RuleVersion == "" {
+			report.Findings[index].RuleVersion = buildinfo.RulesetVersion
+		}
+	}
+	return SanitizeReport(report)
+}
+
+func SanitizeReport(report Report) Report {
+	report.Sanitized = true
+	redact.Strings(&report)
+	return report
 }
 
 func (d *Doctor) diagnoseAddress(ctx context.Context, address string) (Report, error) {

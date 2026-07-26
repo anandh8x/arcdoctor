@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/anandh8x/arcdoctor/schema/report-v1.schema.json",
+  "title": "Arc Doctor report",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "collectedAt",
+    "sanitized",
+    "tool",
+    "network",
+    "findings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "collectedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sanitized": {
+      "type": "boolean"
+    },
+    "tool": {
+      "$ref": "#/$defs/tool"
+    },
+    "network": {
+      "$ref": "#/$defs/network"
+    },
+    "address": {
+      "$ref": "#/$defs/address"
+    },
+    "transaction": {
+      "$ref": "#/$defs/transaction"
+    },
+    "deployment": {
+      "$ref": "#/$defs/deployment"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "rulesetVersion"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "const": "Arc Doctor"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string"
+        },
+        "rulesetVersion": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "required": [
+        "expectedChainId",
+        "observedChainId",
+        "blockNumber",
+        "blockTimestamp",
+        "latencyMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "expectedChainId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observedChainId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blockNumber": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blockTimestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "latencyMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "address": {
+      "type": "object",
+      "required": [
+        "address",
+        "kind",
+        "balanceBaseUnits",
+        "nonce",
+        "codeSize",
+        "explorerUrl"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "contract",
+            "externally_owned_or_empty"
+          ]
+        },
+        "balanceBaseUnits": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "nonce": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "codeSize": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "codeHash": {
+          "type": "string"
+        },
+        "explorerUrl": {
+          "type": "string"
+        }
+      }
+    },
+    "transaction": {
+      "type": "object",
+      "required": [
+        "hash",
+        "state",
+        "valueBaseUnits",
+        "inputData",
+        "gasLimit",
+        "type",
+        "explorerUrl",
+        "replay"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "missing",
+            "pending",
+            "successful",
+            "reverted"
+          ]
+        },
+        "valueBaseUnits": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "inputData": {
+          "type": "string"
+        },
+        "gasLimit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "type": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "explorerUrl": {
+          "type": "string"
+        },
+        "replay": {
+          "type": "object"
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "required": [
+        "manifestName",
+        "format",
+        "schemaVersion",
+        "network",
+        "chainId",
+        "contracts"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "manifestName": {
+          "type": "string"
+        },
+        "format": {
+          "enum": [
+            "arcdoctor",
+            "foundry-broadcast"
+          ]
+        },
+        "schemaVersion": {
+          "type": "integer"
+        },
+        "network": {
+          "type": "string"
+        },
+        "chainId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contracts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "code",
+        "severity",
+        "confidence",
+        "title",
+        "explanation",
+        "evidence",
+        "ruleVersion"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^ARC-[A-Z]+-[0-9]{3}$"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "certain",
+            "likely",
+            "possible"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suggestedActions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ruleVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "related": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
