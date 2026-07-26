@@ -90,8 +90,8 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 		inspectABIs    []string
 	)
 	inspect := &cobra.Command{
-		Use:   "inspect <address>",
-		Short: "Inspect an Arc Testnet address",
+		Use:   "inspect <address-or-transaction-hash>",
+		Short: "Inspect an Arc Testnet address or transaction",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(command.Context(), inspectTimeout)

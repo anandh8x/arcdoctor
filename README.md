@@ -179,6 +179,8 @@ measure, not a guarantee, so review reports before sharing them. See
 
 The [public Arc Testnet demonstration](docs/quietpact-demo.md) provides
 read-only contract and transaction examples that require no wallet or funds.
+The [external regression reproductions](docs/external-regressions.md) connect
+three public builder failures to deterministic tests.
 
 ## Example
 

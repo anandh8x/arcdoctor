@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "arc-chain-id-1516",
+      "kind": "unexpected-chain",
+      "source": "https://github.com/circlefin/arc-node/issues/94",
+      "observedChainId": 1516,
+      "expectedCodes": [
+        "ARC-NET-002"
+      ]
+    },
+    {
+      "id": "arc-rpc-request-limit-32011",
+      "kind": "request-limit",
+      "source": "https://github.com/circlefin/arc-node/issues/207",
+      "rpcErrorCode": -32011,
+      "rpcErrorMessage": "request limit reached",
+      "expectedAttempts": 2
+    },
+    {
+      "id": "arc-rpc-with-anvil-contract-address",
+      "kind": "local-address",
+      "source": "https://github.com/kenhuangus/arc-ai-agents/blob/master/ARC_TESTNET_DEPLOYMENT_COMPLETE.md",
+      "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "expectedCodes": [
+        "ARC-DEP-006",
+        "ARC-DEP-016"
+      ]
+    }
+  ]
+}

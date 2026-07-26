@@ -143,6 +143,9 @@ func diagnoseLive(
 
 	report, err := instance.Diagnose(ctx, request)
 	if err == nil {
+		if temporaryReportFailure(report) {
+			t.Skip("Arc Testnet endpoint is temporarily unavailable")
+		}
 		return report
 	}
 	if temporaryEndpointError(err) {
@@ -157,11 +160,31 @@ func temporaryEndpointError(err error) bool {
 		errors.Is(err, context.Canceled) {
 		return true
 	}
-	message := strings.ToLower(err.Error())
+	return temporaryEndpointText(err.Error())
+}
+
+func temporaryReportFailure(report doctor.Report) bool {
+	for _, finding := range report.Findings {
+		if finding.Code != "ARC-NET-001" &&
+			finding.Code != "ARC-RPC-005" {
+			continue
+		}
+		text := finding.Explanation + " " + strings.Join(finding.Evidence, " ")
+		if temporaryEndpointText(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func temporaryEndpointText(value string) bool {
+	message := strings.ToLower(value)
 	for _, fragment := range []string{
 		"connection refused",
 		"connection reset",
 		"connection timed out",
+		"deadline exceeded",
+		"network is unreachable",
 		"no such host",
 		"temporary failure",
 		"tls handshake timeout",
@@ -179,6 +202,59 @@ func temporaryEndpointError(err error) bool {
 		}
 	}
 	return false
+}
+
+func TestTemporaryReportFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		report doctor.Report
+		want   bool
+	}{
+		{
+			name: "temporary unavailable finding",
+			report: doctor.Report{Findings: []doctor.Finding{{
+				Code:     "ARC-NET-001",
+				Evidence: []string{"RPC detail: dial tcp: connection refused"},
+			}}},
+			want: true,
+		},
+		{
+			name: "temporary request failure",
+			report: doctor.Report{Findings: []doctor.Finding{{
+				Code:     "ARC-RPC-005",
+				Evidence: []string{"RPC detail: status code 503"},
+			}}},
+			want: true,
+		},
+		{
+			name: "unsupported method is a regression",
+			report: doctor.Report{Findings: []doctor.Finding{{
+				Code:     "ARC-RPC-004",
+				Evidence: []string{"RPC detail: method not found"},
+			}}},
+			want: false,
+		},
+		{
+			name: "malformed response is a regression",
+			report: doctor.Report{Findings: []doctor.Finding{{
+				Code:     "ARC-RPC-005",
+				Evidence: []string{"RPC detail: invalid JSON response"},
+			}}},
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := temporaryReportFailure(test.report); got != test.want {
+				t.Fatalf("temporaryReportFailure() = %v, want %v", got, test.want)
+			}
+		})
+	}
 }
 
 func loadFixtures(t *testing.T) fixtures {
