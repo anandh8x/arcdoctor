@@ -16,6 +16,8 @@ const ArcTestnetChainID uint64 = 5_042_002
 
 const ArcTestnetExplorerURL = "https://testnet.arcscan.app"
 
+const DefaultArcTestnetRPC = "https://rpc.testnet.arc.network"
+
 const ArcTestnetStaleBlockThreshold = 2 * time.Minute
 
 type RequestKind string

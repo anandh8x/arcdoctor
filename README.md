@@ -37,6 +37,26 @@ It collects evidence from Arc RPC responses and turns common network problems in
 
 Arc Doctor never requests a private key, signs a transaction, or changes project configuration.
 
+## Guided terminal interface
+
+Run Arc Doctor without arguments in an interactive terminal:
+
+```bash
+go run ./cmd/arcdoctor
+```
+
+The guided interface supports environment, address, transaction, and deployment
+diagnosis through the same deterministic diagnostic module used by the normal
+commands. It provides progress, cancellation, scrollable evidence, responsive
+layouts, and sanitized report export.
+
+Keyboard controls are shown on every screen. Use arrow keys to move, `Enter` to
+select, `Esc` to go back or cancel, and `Ctrl+C` to quit.
+
+The full-screen interface opens only when both standard input and standard
+output are terminals. Running without arguments in a pipe, redirected shell, or
+continuous integration environment prints normal command help.
+
 ## Run from source
 
 Requirements:
@@ -172,8 +192,7 @@ go build -o arcdoctor ./cmd/arcdoctor
 ## Scope
 
 The current implementation covers network, address, transaction, ABI-backed
-error, deployment, and sanitized report workflows. The guided terminal
-interface will be added as its behavior is tested.
+error, deployment, sanitized reports, and a guided terminal interface.
 
 Arc Doctor is a community-built tool and is not affiliated with or endorsed by Circle.
 

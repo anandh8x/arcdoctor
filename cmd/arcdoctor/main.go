@@ -11,6 +11,8 @@ import (
 	"github.com/anandh8x/arcdoctor/internal/cli"
 	"github.com/anandh8x/arcdoctor/internal/doctor"
 	"github.com/anandh8x/arcdoctor/internal/redact"
+	"github.com/anandh8x/arcdoctor/internal/tui"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -24,7 +26,31 @@ func main() {
 			doctor.WithArtifactLoader(os.ReadFile),
 		)
 	}
+	if shouldLaunchTUI(
+		os.Args[1:],
+		term.IsTerminal(int(os.Stdin.Fd())),
+		term.IsTerminal(int(os.Stdout.Fd())),
+	) {
+		err := tui.Run(
+			func(rpcURL string) tui.Diagnoser {
+				return factory(rpcURL)
+			},
+			os.ReadFile,
+			nil,
+			os.Stdin,
+			os.Stdout,
+		)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "arcdoctor: %s\n", redact.String(err.Error()))
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
 	os.Exit(execute(os.Args[1:], os.Stdout, os.Stderr, factory))
+}
+
+func shouldLaunchTUI(args []string, inputTerminal, outputTerminal bool) bool {
+	return len(args) == 0 && inputTerminal && outputTerminal
 }
 
 func execute(

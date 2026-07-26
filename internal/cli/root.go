@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const DefaultArcTestnetRPC = "https://rpc.testnet.arc.network"
+const DefaultArcTestnetRPC = doctor.DefaultArcTestnetRPC
 
 const maxManifestInputBytes = 1 << 20
 
@@ -39,6 +39,9 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 		Version:       buildinfo.Version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
 	}
 	root.SetVersionTemplate("Arc Doctor {{.Version}}\n")
 
