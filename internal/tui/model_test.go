@@ -197,6 +197,73 @@ func TestModelHandlesNarrowTerminalAndExportStatus(t *testing.T) {
 	}
 }
 
+func TestRunningScreenCancelsSharedContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	model := NewModel(nil, nil, nil)
+	model.screen = runningScreen
+	model.cancel = cancel
+
+	updated, _ := model.Update(keyMessage(tea.KeyEscape, ""))
+	model = updated.(Model)
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("context error = %v, want canceled", ctx.Err())
+	}
+	if !strings.Contains(model.status, "Cancelling") {
+		t.Errorf("status = %q, want cancellation progress", model.status)
+	}
+}
+
+func TestResultScreenPreservesPartialEvidenceAfterCancellation(t *testing.T) {
+	t.Parallel()
+
+	partial := doctor.Report{
+		SchemaVersion: 1,
+		CollectedAt:   time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC),
+		Sanitized:     true,
+		Tool: doctor.ToolEvidence{
+			Name:           "Arc Doctor",
+			Version:        "test",
+			RulesetVersion: "1.0.0",
+		},
+		Network: doctor.NetworkEvidence{
+			ExpectedChainID:     doctor.ArcTestnetChainID,
+			ObservedChainID:     doctor.ArcTestnetChainID,
+			BlockNumber:         123,
+			LatencyMilliseconds: 12,
+		},
+		Findings: []doctor.Finding{
+			{
+				Code:        "ARC-NET-000",
+				Severity:    doctor.SeverityInfo,
+				Confidence:  doctor.ConfidenceCertain,
+				Title:       "Partial public evidence",
+				Explanation: "Evidence collected before cancellation.",
+				Evidence:    []string{"Latest block: 123"},
+				RuleVersion: "1.0.0",
+			},
+		},
+	}
+	model := NewModel(nil, nil, nil)
+	updated, _ := model.Update(diagnosisMsg{
+		report: partial,
+		err:    context.Canceled,
+	})
+	model = updated.(Model)
+
+	content := model.View().Content
+	for _, expected := range []string{
+		"could not complete every check",
+		"observed chain 5042002",
+		"Latest block: 123",
+	} {
+		if !strings.Contains(content, expected) {
+			t.Errorf("result view does not contain %q:\n%s", expected, content)
+		}
+	}
+}
+
 func keyMessage(code rune, text string) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{
 		Code: code,

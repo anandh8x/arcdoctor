@@ -50,6 +50,11 @@ go vet ./...
 go build ./cmd/arcdoctor
 ```
 
+When Anvil is installed, `go test ./...` also starts a temporary local node and
+exercises successful transactions, standard error strings, panics, custom
+errors, historical replay, local-address warnings, and artifact comparison. The
+test skips only when Anvil or local listening sockets are unavailable.
+
 Optional read-only live checks use only public Arc Testnet state:
 
 ```bash
