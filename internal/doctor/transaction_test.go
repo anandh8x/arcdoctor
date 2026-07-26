@@ -3,6 +3,7 @@ package doctor_test
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,36 @@ func TestDiagnoseTransactionRejectsMalformedHashBeforeRPC(t *testing.T) {
 	}
 	if len(report.Findings) != 1 || report.Findings[0].Code != "ARC-TX-001" {
 		t.Fatalf("Findings = %#v, want ARC-TX-001", report.Findings)
+	}
+}
+
+func TestDiagnoseTransactionReportsExcessivelyNestedABIAsFinding(t *testing.T) {
+	t.Parallel()
+
+	const hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	transaction := transactionProbeFunc(func(
+		context.Context,
+		string,
+	) (doctor.TransactionSnapshot, error) {
+		return doctor.TransactionSnapshot{Found: false}, nil
+	})
+	nested := []byte(strings.Repeat("[", 65) + strings.Repeat("]", 65))
+
+	report, err := doctor.New(
+		arcNetworkProbe(),
+		doctor.WithTransactionProbe(transaction),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind:   doctor.TransactionCheck,
+		Target: hash,
+		ABIs: []doctor.ABIInput{
+			{Name: "nested.json", Data: nested},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if !hasFinding(report, "ARC-TX-014") {
+		t.Fatalf("Findings = %#v, want ARC-TX-014", report.Findings)
 	}
 }
 

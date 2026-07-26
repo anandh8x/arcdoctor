@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/anandh8x/arcdoctor/internal/jsonlimit"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -649,6 +650,9 @@ func parseDeploymentManifest(input DeploymentInput) (*deploymentManifest, []Find
 			fmt.Sprintf("manifest exceeds %d bytes", maxManifestBytes),
 		)}
 	}
+	if err := jsonlimit.CheckDepth(input.Data, jsonlimit.DefaultMaxDepth); err != nil {
+		return nil, []Finding{invalidManifestFinding(input.Name, err.Error())}
+	}
 
 	var shape map[string]json.RawMessage
 	if err := json.Unmarshal(input.Data, &shape); err != nil {
@@ -812,6 +816,9 @@ type runtimeArtifact struct {
 }
 
 func parseRuntimeArtifact(data []byte) (runtimeArtifact, error) {
+	if err := jsonlimit.CheckDepth(data, jsonlimit.DefaultMaxDepth); err != nil {
+		return runtimeArtifact{}, err
+	}
 	var source struct {
 		DeployedBytecode struct {
 			Object              string                                    `json:"object"`

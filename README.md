@@ -14,6 +14,8 @@ It collects evidence from Arc RPC responses and turns common network problems in
 - Validate EVM addresses before making RPC requests
 - Classify addresses by deployed bytecode
 - Report raw native-token balance, nonce, bytecode size, and bytecode hash
+- Detect exact EIP-1167 minimal proxies and non-zero EIP-1967 implementation
+  or beacon slots
 - Link address evidence to ArcScan
 - Distinguish missing, pending, successful, and reverted transactions
 - Report sender, destination, value, gas, block, type, and ArcScan evidence
@@ -93,6 +95,15 @@ Run a network check:
 ```bash
 go run ./cmd/arcdoctor check
 ```
+
+Include a public wallet balance and nonce in the same environment check:
+
+```bash
+go run ./cmd/arcdoctor check --address 0xYOUR_PUBLIC_ADDRESS
+```
+
+Arc Doctor reports the raw balance as evidence. It does not claim that the
+balance is sufficient without a specific operation and gas estimate.
 
 Produce JSON:
 

@@ -295,7 +295,10 @@ func (m Model) buildRequest() (doctor.Request, string, error) {
 
 	switch m.selected.kind {
 	case doctor.NetworkCheck:
-		return doctor.Request{Kind: doctor.NetworkCheck}, defaultRPC(values[0]), nil
+		return doctor.Request{
+			Kind:          doctor.NetworkCheck,
+			WalletAddress: values[0],
+		}, defaultRPC(values[1]), nil
 	case doctor.AddressCheck:
 		if values[0] == "" {
 			return doctor.Request{}, "", fmt.Errorf("address is required")
@@ -384,6 +387,10 @@ func (m *Model) configureForm() {
 	switch m.selected.kind {
 	case doctor.NetworkCheck:
 		m.fields = []formField{
+			{
+				label: "Wallet address",
+				input: newInput("optional public 0x address", ""),
+			},
 			{
 				label: "RPC URL",
 				input: newInput(doctor.DefaultArcTestnetRPC, doctor.DefaultArcTestnetRPC),
@@ -645,6 +652,14 @@ func formatReport(report doctor.Report, diagnosticError error) string {
 			report.Address.BalanceBaseUnits,
 			report.Address.CodeSize,
 		))
+		if report.Address.Proxy != nil {
+			builder.WriteString(fmt.Sprintf(
+				"Proxy: %s | implementation: %s | beacon: %s\n",
+				report.Address.Proxy.Standard,
+				report.Address.Proxy.Implementation,
+				report.Address.Proxy.Beacon,
+			))
+		}
 	}
 	if report.Transaction != nil {
 		builder.WriteString(fmt.Sprintf(

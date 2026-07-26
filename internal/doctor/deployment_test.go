@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/anandh8x/arcdoctor/internal/doctor"
@@ -105,6 +106,37 @@ func TestDiagnoseDeploymentValidatesKnownArcContracts(t *testing.T) {
 	}
 	if !hasFinding(report, "ARC-DEP-000") {
 		t.Fatalf("Findings = %#v, want ARC-DEP-000", report.Findings)
+	}
+}
+
+func TestDiagnoseDeploymentRejectsExcessiveJSONNestingBeforeRPC(t *testing.T) {
+	t.Parallel()
+
+	networkCalled := false
+	network := networkProbeFunc(func(context.Context) (doctor.NetworkSnapshot, error) {
+		networkCalled = true
+		return doctor.NetworkSnapshot{}, nil
+	})
+	nested := []byte(strings.Repeat("[", 65) + strings.Repeat("]", 65))
+
+	report, err := doctor.New(network).Diagnose(
+		context.Background(),
+		doctor.Request{
+			Kind: doctor.DeploymentCheck,
+			Deployment: &doctor.DeploymentInput{
+				Name: "nested.json",
+				Data: nested,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if networkCalled {
+		t.Fatal("network probe was called for rejected local input")
+	}
+	if !hasFinding(report, "ARC-DEP-001") {
+		t.Fatalf("Findings = %#v, want ARC-DEP-001", report.Findings)
 	}
 }
 

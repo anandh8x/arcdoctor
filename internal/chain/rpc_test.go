@@ -6,10 +6,12 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/anandh8x/arcdoctor/internal/chain"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type rpcRequest struct {
@@ -123,6 +125,7 @@ func TestRPCProbeCollectsAddressEvidence(t *testing.T) {
 		"eth_getBalance":          "0x1bc16d674ec80000",
 		"eth_getTransactionCount": "0x1",
 		"eth_getCode":             "0x60006000",
+		"eth_getStorageAt":        "0x0000000000000000000000002222222222222222222222222222222222222222",
 	})
 	probe := chain.NewRPCProbe(
 		"http://arcdoctor.test",
@@ -145,6 +148,40 @@ func TestRPCProbeCollectsAddressEvidence(t *testing.T) {
 	}
 	if got, want := string(snapshot.Code), string([]byte{0x60, 0x00, 0x60, 0x00}); got != want {
 		t.Errorf("Code = %x, want %x", snapshot.Code, []byte(want))
+	}
+	if got := common.BytesToAddress(snapshot.EIP1967Implementation).Hex(); got !=
+		"0x2222222222222222222222222222222222222222" {
+		t.Errorf("EIP-1967 implementation = %s", got)
+	}
+}
+
+func TestRPCProbeKeepsCoreAddressEvidenceWhenProxyStorageIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	httpClient := rpcHTTPClient(t, map[string]any{
+		"eth_getBalance":          "0x0",
+		"eth_getTransactionCount": "0x0",
+		"eth_getCode":             "0x60006000",
+		"eth_getStorageAt": rpcFailure{
+			Code:    -32601,
+			Message: "method not found",
+		},
+	})
+	snapshot, err := chain.NewRPCProbe(
+		"http://arcdoctor.test",
+		chain.WithHTTPClient(httpClient),
+	).AddressSnapshot(
+		context.Background(),
+		"0x1111111111111111111111111111111111111111",
+	)
+	if err != nil {
+		t.Fatalf("AddressSnapshot() error = %v", err)
+	}
+	if len(snapshot.Code) == 0 {
+		t.Fatal("core bytecode evidence was discarded")
+	}
+	if !strings.Contains(snapshot.ProxyStorageError, "method not found") {
+		t.Errorf("ProxyStorageError = %q", snapshot.ProxyStorageError)
 	}
 }
 

@@ -46,6 +46,33 @@ func TestModelGuidesUserFromHomeToAddressForm(t *testing.T) {
 	}
 }
 
+func TestEnvironmentFormIncludesOptionalWalletAndBuildsEquivalentRequest(t *testing.T) {
+	t.Parallel()
+
+	const wallet = "0x99066fBc97557490fA794F750630bb41733D1004"
+	model := NewModel(nil, nil, nil)
+	model.selected = diagnosisChoices[0]
+	model.configureForm()
+
+	if len(model.fields) != 2 ||
+		model.fields[0].label != "Wallet address" ||
+		model.fields[1].label != "RPC URL" {
+		t.Fatalf("fields = %#v, want optional wallet and RPC", model.fields)
+	}
+	model.fields[0].input.SetValue(wallet)
+
+	request, rpcURL, err := model.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest() error = %v", err)
+	}
+	if request.Kind != doctor.NetworkCheck || request.WalletAddress != wallet {
+		t.Errorf("request = %#v, want network check with wallet", request)
+	}
+	if rpcURL != doctor.DefaultArcTestnetRPC {
+		t.Errorf("RPC URL = %q, want default", rpcURL)
+	}
+}
+
 func TestModelUsesDeterministicDiagnoserAndShowsFindings(t *testing.T) {
 	t.Parallel()
 

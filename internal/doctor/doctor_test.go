@@ -2,6 +2,7 @@ package doctor_test
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"math/big"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anandh8x/arcdoctor/internal/doctor"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type networkProbeFunc func(context.Context) (doctor.NetworkSnapshot, error)
@@ -272,6 +274,189 @@ func TestDiagnoseAddressRejectsMalformedTargetBeforeRPC(t *testing.T) {
 			report.Findings[0].Confidence,
 			doctor.ConfidenceCertain,
 		)
+	}
+}
+
+func TestDiagnoseEnvironmentCollectsOptionalWalletEvidence(t *testing.T) {
+	t.Parallel()
+
+	const wallet = "0x99066fBc97557490fA794F750630bb41733D1004"
+	address := addressProbeFunc(func(
+		_ context.Context,
+		got string,
+	) (doctor.AddressSnapshot, error) {
+		if got != wallet {
+			t.Fatalf("wallet address = %q, want %q", got, wallet)
+		}
+		return doctor.AddressSnapshot{
+			BalanceBaseUnits: big.NewInt(42),
+			Nonce:            7,
+		}, nil
+	})
+
+	report, err := doctor.New(
+		arcNetworkProbe(),
+		doctor.WithAddressProbe(address),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind:          doctor.NetworkCheck,
+		WalletAddress: wallet,
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.Address == nil {
+		t.Fatal("Address evidence is nil")
+	}
+	if report.Address.BalanceBaseUnits != "42" || report.Address.Nonce != 7 {
+		t.Errorf("Address = %#v, want wallet balance and nonce", report.Address)
+	}
+	if !hasFinding(report, "ARC-WAL-000") {
+		t.Fatalf("Findings = %#v, want ARC-WAL-000", report.Findings)
+	}
+}
+
+func TestDiagnoseEnvironmentReportsMalformedOptionalWalletAfterNetworkCheck(t *testing.T) {
+	t.Parallel()
+
+	report, err := doctor.New(arcNetworkProbe()).Diagnose(
+		context.Background(),
+		doctor.Request{
+			Kind:          doctor.NetworkCheck,
+			WalletAddress: "not-an-address",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.Network.ObservedChainID != doctor.ArcTestnetChainID {
+		t.Fatalf("network evidence was not collected: %#v", report.Network)
+	}
+	if !hasFinding(report, "ARC-WAL-001") {
+		t.Fatalf("Findings = %#v, want ARC-WAL-001", report.Findings)
+	}
+}
+
+func TestDiagnoseAddressDetectsEIP1167MinimalProxy(t *testing.T) {
+	t.Parallel()
+
+	const (
+		proxyAddress          = "0x1111111111111111111111111111111111111111"
+		implementationAddress = "0x2222222222222222222222222222222222222222"
+	)
+	code, err := hex.DecodeString(
+		"363d3d373d3d3d363d73" +
+			strings.TrimPrefix(implementationAddress, "0x") +
+			"5af43d82803e903d91602b57fd5bf3",
+	)
+	if err != nil {
+		t.Fatalf("decode minimal proxy fixture: %v", err)
+	}
+	address := addressProbeFunc(func(
+		context.Context,
+		string,
+	) (doctor.AddressSnapshot, error) {
+		return doctor.AddressSnapshot{
+			BalanceBaseUnits: big.NewInt(0),
+			Code:             code,
+		}, nil
+	})
+
+	report, err := doctor.New(
+		arcNetworkProbe(),
+		doctor.WithAddressProbe(address),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind:   doctor.AddressCheck,
+		Target: proxyAddress,
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.Address == nil || report.Address.Proxy == nil {
+		t.Fatalf("Address = %#v, want proxy evidence", report.Address)
+	}
+	if report.Address.Proxy.Standard != doctor.ProxyStandardEIP1167 ||
+		report.Address.Proxy.Implementation != implementationAddress {
+		t.Errorf("Proxy = %#v, want EIP-1167 implementation", report.Address.Proxy)
+	}
+	if report.Address.Proxy.Confidence != doctor.ConfidenceCertain {
+		t.Errorf(
+			"Proxy confidence = %q, want certain",
+			report.Address.Proxy.Confidence,
+		)
+	}
+	if !hasFinding(report, "ARC-ADR-003") {
+		t.Fatalf("Findings = %#v, want ARC-ADR-003", report.Findings)
+	}
+}
+
+func TestDiagnoseAddressDetectsEIP1967ImplementationSlot(t *testing.T) {
+	t.Parallel()
+
+	const (
+		proxyAddress          = "0x1111111111111111111111111111111111111111"
+		implementationAddress = "0x2222222222222222222222222222222222222222"
+	)
+	slot := make([]byte, 32)
+	copy(slot[12:], common.HexToAddress(implementationAddress).Bytes())
+	address := addressProbeFunc(func(
+		context.Context,
+		string,
+	) (doctor.AddressSnapshot, error) {
+		return doctor.AddressSnapshot{
+			BalanceBaseUnits:      big.NewInt(0),
+			Code:                  []byte{0x60, 0x00},
+			EIP1967Implementation: slot,
+		}, nil
+	})
+
+	report, err := doctor.New(
+		arcNetworkProbe(),
+		doctor.WithAddressProbe(address),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind:   doctor.AddressCheck,
+		Target: proxyAddress,
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.Address == nil || report.Address.Proxy == nil {
+		t.Fatalf("Address = %#v, want proxy evidence", report.Address)
+	}
+	if report.Address.Proxy.Standard != doctor.ProxyStandardEIP1967 ||
+		report.Address.Proxy.Implementation != implementationAddress {
+		t.Errorf("Proxy = %#v, want EIP-1967 implementation", report.Address.Proxy)
+	}
+	if !hasFinding(report, "ARC-ADR-004") {
+		t.Fatalf("Findings = %#v, want ARC-ADR-004", report.Findings)
+	}
+}
+
+func TestDiagnoseAddressDistinguishesUnsupportedProxyStorageMethod(t *testing.T) {
+	t.Parallel()
+
+	address := addressProbeFunc(func(
+		context.Context,
+		string,
+	) (doctor.AddressSnapshot, error) {
+		return doctor.AddressSnapshot{
+			BalanceBaseUnits:        big.NewInt(0),
+			Code:                    []byte{0x60, 0x00},
+			ProxyStorageUnsupported: true,
+			ProxyStorageError:       "method not found",
+		}, nil
+	})
+	report, err := doctor.New(
+		arcNetworkProbe(),
+		doctor.WithAddressProbe(address),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind:   doctor.AddressCheck,
+		Target: "0x1111111111111111111111111111111111111111",
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if !hasFinding(report, "ARC-RPC-002") {
+		t.Fatalf("Findings = %#v, want ARC-RPC-002", report.Findings)
 	}
 }
 

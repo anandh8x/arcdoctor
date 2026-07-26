@@ -142,6 +142,43 @@
         },
         "explorerUrl": {
           "type": "string"
+        },
+        "proxy": {
+          "$ref": "#/$defs/proxy"
+        }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "required": [
+        "standard",
+        "confidence",
+        "basis"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "standard": {
+          "enum": [
+            "eip_1167",
+            "eip_1967"
+          ]
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "beacon": {
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "certain",
+            "likely",
+            "possible"
+          ]
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },

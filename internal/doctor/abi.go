@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/anandh8x/arcdoctor/internal/jsonlimit"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -18,6 +19,8 @@ var (
 	errorStringSelector = [4]byte{0x08, 0xc3, 0x79, 0xa0}
 	panicSelector       = [4]byte{0x4e, 0x48, 0x7b, 0x71}
 )
+
+const maxABIBytes = 10 << 20
 
 type namedABI struct {
 	name string
@@ -59,6 +62,12 @@ func parseABIs(inputs []ABIInput) (abiCatalog, []Finding) {
 }
 
 func parseABI(data []byte) (abi.ABI, error) {
+	if len(data) > maxABIBytes {
+		return abi.ABI{}, fmt.Errorf("ABI input exceeds %d bytes", maxABIBytes)
+	}
+	if err := jsonlimit.CheckDepth(data, jsonlimit.DefaultMaxDepth); err != nil {
+		return abi.ABI{}, err
+	}
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
 		return abi.ABI{}, fmt.Errorf("empty input")

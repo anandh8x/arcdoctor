@@ -14,6 +14,13 @@ the finding.
 | `ARC-ADR-000` | Contract bytecode found |
 | `ARC-ADR-001` | Address is malformed |
 | `ARC-ADR-002` | No contract bytecode found |
+| `ARC-ADR-003` | Exact EIP-1167 minimal proxy runtime detected |
+| `ARC-ADR-004` | Non-zero EIP-1967 implementation or beacon slot detected |
+| `ARC-WAL-000` | Optional wallet balance and nonce collected |
+| `ARC-WAL-001` | Optional wallet address is malformed |
+| `ARC-WAL-002` | Wallet target contains contract bytecode |
+| `ARC-RPC-002` | Optional proxy storage method is unsupported |
+| `ARC-RPC-003` | Optional proxy storage inspection failed |
 
 ## Transactions
 

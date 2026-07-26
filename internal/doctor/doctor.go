@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/big"
@@ -35,10 +36,11 @@ type ABIInput struct {
 }
 
 type Request struct {
-	Kind       RequestKind
-	Target     string
-	ABIs       []ABIInput
-	Deployment *DeploymentInput
+	Kind          RequestKind
+	Target        string
+	WalletAddress string
+	ABIs          []ABIInput
+	Deployment    *DeploymentInput
 }
 
 type NetworkSnapshot struct {
@@ -59,9 +61,13 @@ type NetworkEvidence struct {
 }
 
 type AddressSnapshot struct {
-	BalanceBaseUnits *big.Int
-	Nonce            uint64
-	Code             []byte
+	BalanceBaseUnits        *big.Int
+	Nonce                   uint64
+	Code                    []byte
+	EIP1967Implementation   []byte
+	EIP1967Beacon           []byte
+	ProxyStorageUnsupported bool
+	ProxyStorageError       string
 }
 
 type AddressKind string
@@ -72,13 +78,29 @@ const (
 )
 
 type AddressEvidence struct {
-	Address          string      `json:"address"`
-	Kind             AddressKind `json:"kind"`
-	BalanceBaseUnits string      `json:"balanceBaseUnits"`
-	Nonce            uint64      `json:"nonce"`
-	CodeSize         int         `json:"codeSize"`
-	CodeHash         string      `json:"codeHash,omitempty"`
-	ExplorerURL      string      `json:"explorerUrl"`
+	Address          string         `json:"address"`
+	Kind             AddressKind    `json:"kind"`
+	BalanceBaseUnits string         `json:"balanceBaseUnits"`
+	Nonce            uint64         `json:"nonce"`
+	CodeSize         int            `json:"codeSize"`
+	CodeHash         string         `json:"codeHash,omitempty"`
+	ExplorerURL      string         `json:"explorerUrl"`
+	Proxy            *ProxyEvidence `json:"proxy,omitempty"`
+}
+
+type ProxyStandard string
+
+const (
+	ProxyStandardEIP1167 ProxyStandard = "eip_1167"
+	ProxyStandardEIP1967 ProxyStandard = "eip_1967"
+)
+
+type ProxyEvidence struct {
+	Standard       ProxyStandard `json:"standard"`
+	Implementation string        `json:"implementation,omitempty"`
+	Beacon         string        `json:"beacon,omitempty"`
+	Confidence     Confidence    `json:"confidence"`
+	Basis          string        `json:"basis"`
 }
 
 type Severity string
@@ -212,7 +234,11 @@ func (d *Doctor) Diagnose(ctx context.Context, request Request) (Report, error) 
 	var err error
 	switch request.Kind {
 	case NetworkCheck:
-		report, err = d.diagnoseNetwork(ctx)
+		if request.WalletAddress == "" {
+			report, err = d.diagnoseNetwork(ctx)
+		} else {
+			report, err = d.diagnoseEnvironment(ctx, request.WalletAddress)
+		}
 	case AddressCheck:
 		if !common.IsHexAddress(request.Target) {
 			report = Report{
@@ -287,12 +313,93 @@ func (d *Doctor) diagnoseAddress(ctx context.Context, address string) (Report, e
 		return report, err
 	}
 
+	evidence, findings, err := d.collectAddressEvidence(ctx, address)
+	if err != nil {
+		return Report{}, err
+	}
+	report.Address = &evidence
+	report.Findings = append(report.Findings, findings...)
+	return report, nil
+}
+
+func (d *Doctor) diagnoseEnvironment(
+	ctx context.Context,
+	walletAddress string,
+) (Report, error) {
+	report, err := d.diagnoseNetwork(ctx)
+	if err != nil || report.HasErrors() {
+		return report, err
+	}
+	if !common.IsHexAddress(walletAddress) {
+		report.Findings = append(report.Findings, Finding{
+			Code:        "ARC-WAL-001",
+			Severity:    SeverityError,
+			Confidence:  ConfidenceCertain,
+			Title:       "Wallet address is malformed",
+			Explanation: "The optional wallet target is not a valid 20-byte EVM address.",
+			Evidence: []string{
+				fmt.Sprintf("Supplied wallet: %q", walletAddress),
+			},
+			SuggestedActions: []string{
+				"Provide a public wallet address containing 0x followed by 40 hexadecimal characters.",
+			},
+		})
+		return report, nil
+	}
+
+	address := common.HexToAddress(walletAddress).Hex()
+	evidence, addressFindings, err := d.collectAddressEvidence(ctx, address)
+	if err != nil {
+		return report, err
+	}
+	report.Address = &evidence
+	report.Findings = append(report.Findings, Finding{
+		Code:        "ARC-WAL-000",
+		Severity:    SeverityInfo,
+		Confidence:  ConfidenceCertain,
+		Title:       "Wallet evidence collected",
+		Explanation: "Arc Doctor read the public balance and nonce without requesting signing access.",
+		Evidence: []string{
+			fmt.Sprintf("Address: %s", evidence.Address),
+			fmt.Sprintf("Raw native balance: %s base units", evidence.BalanceBaseUnits),
+			fmt.Sprintf("Nonce: %d", evidence.Nonce),
+		},
+		SuggestedActions: []string{
+			"Compare this raw balance with the estimated cost of the specific operation before deciding whether it is sufficient.",
+		},
+	})
+	if evidence.CodeSize > 0 {
+		report.Findings = append(report.Findings, Finding{
+			Code:        "ARC-WAL-002",
+			Severity:    SeverityWarning,
+			Confidence:  ConfidenceCertain,
+			Title:       "Wallet target contains contract bytecode",
+			Explanation: "The supplied wallet target is a contract address. This may be intentional for a smart account.",
+			Evidence: []string{
+				fmt.Sprintf("Address: %s", evidence.Address),
+				fmt.Sprintf("Bytecode size: %d bytes", evidence.CodeSize),
+			},
+			SuggestedActions: []string{
+				"Confirm that the application is intended to use this contract-based account.",
+			},
+		})
+	}
+	report.Findings = append(report.Findings, addressFindings...)
+	return report, nil
+}
+
+func (d *Doctor) collectAddressEvidence(
+	ctx context.Context,
+	address string,
+) (AddressEvidence, []Finding, error) {
 	if d.address == nil {
-		return Report{}, fmt.Errorf("collect address evidence: address probe is unavailable")
+		return AddressEvidence{}, nil, fmt.Errorf(
+			"collect address evidence: address probe is unavailable",
+		)
 	}
 	snapshot, err := d.address.AddressSnapshot(ctx, address)
 	if err != nil {
-		return Report{}, fmt.Errorf("collect address evidence: %w", err)
+		return AddressEvidence{}, nil, fmt.Errorf("collect address evidence: %w", err)
 	}
 
 	balance := "0"
@@ -330,7 +437,7 @@ func (d *Doctor) diagnoseAddress(ctx context.Context, address string) (Report, e
 		}
 	}
 
-	report.Address = &AddressEvidence{
+	evidence := AddressEvidence{
 		Address:          address,
 		Kind:             kind,
 		BalanceBaseUnits: balance,
@@ -339,8 +446,130 @@ func (d *Doctor) diagnoseAddress(ctx context.Context, address string) (Report, e
 		CodeHash:         codeHash,
 		ExplorerURL:      ArcTestnetExplorerURL + "/address/" + address,
 	}
-	report.Findings = append(report.Findings, finding)
-	return report, nil
+	findings := []Finding{finding}
+	proxy, proxyFindings := detectProxy(snapshot)
+	evidence.Proxy = proxy
+	findings = append(findings, proxyFindings...)
+	return evidence, findings, nil
+}
+
+func detectProxy(snapshot AddressSnapshot) (*ProxyEvidence, []Finding) {
+	if implementation, ok := eip1167Implementation(snapshot.Code); ok {
+		evidence := &ProxyEvidence{
+			Standard:       ProxyStandardEIP1167,
+			Implementation: implementation,
+			Confidence:     ConfidenceCertain,
+			Basis:          "Exact EIP-1167 minimal proxy runtime bytecode",
+		}
+		return evidence, []Finding{
+			{
+				Code:        "ARC-ADR-003",
+				Severity:    SeverityInfo,
+				Confidence:  ConfidenceCertain,
+				Title:       "EIP-1167 minimal proxy detected",
+				Explanation: "The runtime bytecode exactly matches the standard minimal proxy form and contains an implementation address.",
+				Evidence: []string{
+					"Proxy standard: EIP-1167",
+					"Implementation address: " + implementation,
+				},
+				SuggestedActions: []string{
+					"Inspect the implementation contract separately before drawing conclusions about behavior.",
+				},
+			},
+		}
+	}
+
+	implementation := addressFromStorageSlot(snapshot.EIP1967Implementation)
+	beacon := addressFromStorageSlot(snapshot.EIP1967Beacon)
+	if implementation != "" || beacon != "" {
+		evidence := &ProxyEvidence{
+			Standard:       ProxyStandardEIP1967,
+			Implementation: implementation,
+			Beacon:         beacon,
+			Confidence:     ConfidenceCertain,
+			Basis:          "Non-zero standard EIP-1967 proxy storage slot",
+		}
+		values := []string{"Proxy standard: EIP-1967"}
+		if implementation != "" {
+			values = append(values, "Implementation address: "+implementation)
+		}
+		if beacon != "" {
+			values = append(values, "Beacon address: "+beacon)
+		}
+		return evidence, []Finding{
+			{
+				Code:        "ARC-ADR-004",
+				Severity:    SeverityInfo,
+				Confidence:  ConfidenceCertain,
+				Title:       "EIP-1967 proxy storage detected",
+				Explanation: "A standard EIP-1967 implementation or beacon slot contains a non-zero address.",
+				Evidence:    values,
+				SuggestedActions: []string{
+					"Inspect the implementation or beacon contract separately before drawing conclusions about behavior.",
+				},
+			},
+		}
+	}
+
+	if snapshot.ProxyStorageError != "" {
+		code := "ARC-RPC-003"
+		title := "Proxy storage inspection failed"
+		explanation := "Arc Doctor retained the core address evidence, but the optional proxy storage request failed."
+		if snapshot.ProxyStorageUnsupported {
+			code = "ARC-RPC-002"
+			title = "RPC does not support proxy storage inspection"
+			explanation = "Arc Doctor retained the core address evidence, but the endpoint reported that the optional storage method is unsupported."
+		}
+		return nil, []Finding{
+			{
+				Code:        code,
+				Severity:    SeverityWarning,
+				Confidence:  ConfidenceCertain,
+				Title:       title,
+				Explanation: explanation,
+				Evidence: []string{
+					"RPC detail: " + snapshot.ProxyStorageError,
+				},
+				SuggestedActions: []string{
+					"Use another Arc Testnet RPC endpoint if proxy storage evidence is required.",
+				},
+			},
+		}
+	}
+	return nil, nil
+}
+
+func eip1167Implementation(code []byte) (string, bool) {
+	prefix := []byte{
+		0x36, 0x3d, 0x3d, 0x37, 0x3d, 0x3d, 0x3d, 0x36, 0x3d, 0x73,
+	}
+	suffix := []byte{
+		0x5a, 0xf4, 0x3d, 0x82, 0x80, 0x3e, 0x90, 0x3d,
+		0x91, 0x60, 0x2b, 0x57, 0xfd, 0x5b, 0xf3,
+	}
+	if len(code) != len(prefix)+common.AddressLength+len(suffix) ||
+		!bytes.Equal(code[:len(prefix)], prefix) ||
+		!bytes.Equal(code[len(prefix)+common.AddressLength:], suffix) {
+		return "", false
+	}
+	implementation := common.BytesToAddress(
+		code[len(prefix) : len(prefix)+common.AddressLength],
+	)
+	if implementation == (common.Address{}) {
+		return "", false
+	}
+	return implementation.Hex(), true
+}
+
+func addressFromStorageSlot(slot []byte) string {
+	if len(slot) != common.HashLength {
+		return ""
+	}
+	address := common.BytesToAddress(slot[common.HashLength-common.AddressLength:])
+	if address == (common.Address{}) {
+		return ""
+	}
+	return address.Hex()
 }
 
 func (d *Doctor) diagnoseNetwork(ctx context.Context) (Report, error) {

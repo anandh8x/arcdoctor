@@ -10,12 +10,17 @@ import (
 	"github.com/anandh8x/arcdoctor/internal/chain"
 	"github.com/anandh8x/arcdoctor/internal/cli"
 	"github.com/anandh8x/arcdoctor/internal/doctor"
+	"github.com/anandh8x/arcdoctor/internal/localfile"
 	"github.com/anandh8x/arcdoctor/internal/redact"
 	"github.com/anandh8x/arcdoctor/internal/tui"
 	"golang.org/x/term"
 )
 
 func main() {
+	const maxProjectInputBytes = 10 << 20
+	readProjectFile := func(path string) ([]byte, error) {
+		return localfile.Read(path, maxProjectInputBytes)
+	}
 	factory := func(rpcURL string) cli.Diagnoser {
 		probe := chain.NewRPCProbe(rpcURL)
 		return doctor.New(
@@ -23,7 +28,7 @@ func main() {
 			doctor.WithAddressProbe(probe),
 			doctor.WithBytecodeProbe(probe),
 			doctor.WithTransactionProbe(probe),
-			doctor.WithArtifactLoader(os.ReadFile),
+			doctor.WithArtifactLoader(readProjectFile),
 		)
 	}
 	if shouldLaunchTUI(
@@ -35,7 +40,7 @@ func main() {
 			func(rpcURL string) tui.Diagnoser {
 				return factory(rpcURL)
 			},
-			os.ReadFile,
+			readProjectFile,
 			nil,
 			os.Stdin,
 			os.Stdout,

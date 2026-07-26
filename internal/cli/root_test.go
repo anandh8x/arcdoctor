@@ -111,6 +111,45 @@ func TestCheckWritesReadableTerminalReport(t *testing.T) {
 	}
 }
 
+func TestCheckForwardsOptionalWalletAddress(t *testing.T) {
+	t.Parallel()
+
+	const wallet = "0x99066fBc97557490fA794F750630bb41733D1004"
+	factory := func(string) cli.Diagnoser {
+		return diagnoserFunc(func(
+			_ context.Context,
+			request doctor.Request,
+		) (doctor.Report, error) {
+			if request.Kind != doctor.NetworkCheck {
+				t.Errorf("request.Kind = %q, want network", request.Kind)
+			}
+			if request.WalletAddress != wallet {
+				t.Errorf(
+					"request.WalletAddress = %q, want %q",
+					request.WalletAddress,
+					wallet,
+				)
+			}
+			return doctor.Report{
+				Findings: []doctor.Finding{
+					{
+						Code:       "ARC-NET-000",
+						Severity:   doctor.SeverityInfo,
+						Confidence: doctor.ConfidenceCertain,
+					},
+				},
+			}, nil
+		})
+	}
+
+	command := cli.NewRootCommand(factory)
+	command.SetOut(&bytes.Buffer{})
+	command.SetArgs([]string{"check", "--address", wallet})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+}
+
 func TestCheckReturnsDiagnosticExitAfterWritingErrorFinding(t *testing.T) {
 	t.Parallel()
 
@@ -428,5 +467,23 @@ func TestReportCommandSanitizesExistingJSONReport(t *testing.T) {
 	}
 	if output.Transaction == nil || output.Transaction.Hash != transactionHash {
 		t.Errorf("public transaction hash was not preserved: %#v", output.Transaction)
+	}
+}
+
+func TestReportCommandRejectsExcessiveJSONNesting(t *testing.T) {
+	t.Parallel()
+
+	inputPath := filepath.Join(t.TempDir(), "nested.json")
+	input := []byte(strings.Repeat("[", 65) + strings.Repeat("]", 65))
+	if err := os.WriteFile(inputPath, input, 0o600); err != nil {
+		t.Fatalf("write nested fixture: %v", err)
+	}
+
+	command := cli.NewRootCommand(healthyFactory())
+	command.SetOut(&bytes.Buffer{})
+	command.SetArgs([]string{"report", inputPath})
+	err := command.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "nesting depth exceeds") {
+		t.Fatalf("ExecuteContext() error = %v, want nesting error", err)
 	}
 }

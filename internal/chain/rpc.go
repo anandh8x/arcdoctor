@@ -20,6 +20,11 @@ type RPCProbe struct {
 	httpClient *http.Client
 }
 
+const (
+	eip1967ImplementationSlot = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+	eip1967BeaconSlot         = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
+)
+
 type RPCProbeOption func(*RPCProbe)
 
 func WithHTTPClient(client *http.Client) RPCProbeOption {
@@ -116,11 +121,47 @@ func (p *RPCProbe) AddressSnapshot(
 		return doctor.AddressSnapshot{}, fmt.Errorf("read address bytecode: %w", err)
 	}
 
-	return doctor.AddressSnapshot{
+	snapshot := doctor.AddressSnapshot{
 		BalanceBaseUnits: new(big.Int).Set((*big.Int)(&balance)),
 		Nonce:            uint64(nonce),
 		Code:             append([]byte(nil), code...),
-	}, nil
+	}
+	if len(code) == 0 {
+		return snapshot, nil
+	}
+
+	var implementation hexutil.Bytes
+	if err := callContext(
+		ctx,
+		client,
+		&implementation,
+		"eth_getStorageAt",
+		address,
+		eip1967ImplementationSlot,
+		"latest",
+	); err != nil {
+		snapshot.ProxyStorageUnsupported = isMethodNotFoundError(err)
+		snapshot.ProxyStorageError = "read EIP-1967 implementation slot: " + err.Error()
+		return snapshot, nil
+	}
+	snapshot.EIP1967Implementation = leftPadHash(implementation)
+
+	var beacon hexutil.Bytes
+	if err := callContext(
+		ctx,
+		client,
+		&beacon,
+		"eth_getStorageAt",
+		address,
+		eip1967BeaconSlot,
+		"latest",
+	); err != nil {
+		snapshot.ProxyStorageUnsupported = isMethodNotFoundError(err)
+		snapshot.ProxyStorageError = "read EIP-1967 beacon slot: " + err.Error()
+		return snapshot, nil
+	}
+	snapshot.EIP1967Beacon = leftPadHash(beacon)
+	return snapshot, nil
 }
 
 func (p *RPCProbe) Bytecode(ctx context.Context, address string) ([]byte, error) {
@@ -338,6 +379,20 @@ func isRateLimitError(err error) bool {
 	return strings.Contains(message, "rate limit") ||
 		strings.Contains(message, "request limit") ||
 		strings.Contains(message, "too many requests")
+}
+
+func isMethodNotFoundError(err error) bool {
+	var rpcError rpc.Error
+	return errors.As(err, &rpcError) && rpcError.ErrorCode() == -32601
+}
+
+func leftPadHash(value []byte) []byte {
+	if len(value) > common.HashLength {
+		return append([]byte(nil), value[len(value)-common.HashLength:]...)
+	}
+	result := make([]byte, common.HashLength)
+	copy(result[common.HashLength-len(value):], value)
+	return result
 }
 
 func transactionValue(transaction *rpcTransaction) *big.Int {

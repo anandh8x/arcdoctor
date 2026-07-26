@@ -14,6 +14,8 @@ import (
 
 	"github.com/anandh8x/arcdoctor/internal/buildinfo"
 	"github.com/anandh8x/arcdoctor/internal/doctor"
+	"github.com/anandh8x/arcdoctor/internal/jsonlimit"
+	"github.com/anandh8x/arcdoctor/internal/localfile"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/cobra"
 )
@@ -23,6 +25,8 @@ const DefaultArcTestnetRPC = doctor.DefaultArcTestnetRPC
 const maxManifestInputBytes = 1 << 20
 
 const maxReportInputBytes = 16 << 20
+
+const maxABIInputBytes = 10 << 20
 
 var ErrDiagnosticFindings = errors.New("diagnostic errors found")
 
@@ -46,9 +50,10 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 	root.SetVersionTemplate("Arc Doctor {{.Version}}\n")
 
 	var (
-		rpcURL  string
-		asJSON  bool
-		timeout time.Duration
+		rpcURL        string
+		asJSON        bool
+		timeout       time.Duration
+		walletAddress string
 	)
 
 	check := &cobra.Command{
@@ -59,7 +64,8 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 			defer cancel()
 
 			report, err := factory(rpcURL).Diagnose(ctx, doctor.Request{
-				Kind: doctor.NetworkCheck,
+				Kind:          doctor.NetworkCheck,
+				WalletAddress: walletAddress,
 			})
 			if err != nil {
 				return err
@@ -68,6 +74,12 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 		},
 	}
 	check.Flags().StringVar(&rpcURL, "rpc", DefaultArcTestnetRPC, "Arc JSON-RPC endpoint")
+	check.Flags().StringVar(
+		&walletAddress,
+		"address",
+		"",
+		"optional public wallet address to inspect",
+	)
 	check.Flags().BoolVar(&asJSON, "json", false, "write a machine-readable JSON report")
 	check.Flags().DurationVar(&timeout, "timeout", 10*time.Second, "diagnostic timeout")
 
@@ -213,6 +225,12 @@ func NewRootCommand(factory DiagnoserFactory) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := jsonlimit.CheckDepth(
+				data,
+				jsonlimit.DefaultMaxDepth,
+			); err != nil {
+				return fmt.Errorf("validate report JSON: %w", err)
+			}
 			var report doctor.Report
 			decoder := json.NewDecoder(bytes.NewReader(data))
 			if err := decoder.Decode(&report); err != nil {
@@ -327,20 +345,7 @@ func readReportInput(command *cobra.Command, path string) ([]byte, error) {
 }
 
 func readLimitedFile(path string, maximum int64) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > maximum {
-		return nil, fmt.Errorf("file exceeds %d bytes", maximum)
-	}
-	return data, nil
+	return localfile.Read(path, maximum)
 }
 
 func parseArtifactOverrides(values []string) (map[string]string, error) {
@@ -369,7 +374,7 @@ func parseArtifactOverrides(values []string) (map[string]string, error) {
 func readABIInputs(paths []string) ([]doctor.ABIInput, error) {
 	inputs := make([]doctor.ABIInput, 0, len(paths))
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := readLimitedFile(path, maxABIInputBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read ABI file %q: %w", path, err)
 		}
@@ -442,6 +447,18 @@ func renderTerminal(writer io.Writer, report doctor.Report) error {
 			report.Address.ExplorerURL,
 		); err != nil {
 			return fmt.Errorf("write address report: %w", err)
+		}
+		if report.Address.Proxy != nil {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Proxy:        %s\nImplementation: %s\nBeacon:       %s\nProxy basis:  %s\n",
+				report.Address.Proxy.Standard,
+				report.Address.Proxy.Implementation,
+				report.Address.Proxy.Beacon,
+				report.Address.Proxy.Basis,
+			); err != nil {
+				return fmt.Errorf("write proxy evidence: %w", err)
+			}
 		}
 	}
 
