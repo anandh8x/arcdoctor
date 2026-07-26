@@ -37,6 +37,31 @@ It collects evidence from Arc RPC responses and turns common network problems in
 
 Arc Doctor never requests a private key, signs a transaction, or changes project configuration.
 
+## Install
+
+Tagged releases provide checksummed archives for Linux, macOS, and Windows.
+Download the archive for your platform from
+[GitHub Releases](https://github.com/anandh8x/arcdoctor/releases), verify it
+against `checksums.txt`, and place the `arcdoctor` executable on your `PATH`.
+
+Install the latest tagged version with Go:
+
+```bash
+go install github.com/anandh8x/arcdoctor/cmd/arcdoctor@latest
+```
+
+Confirm the installed build:
+
+```bash
+arcdoctor --version
+```
+
+To build the current source instead, clone the repository and run:
+
+```bash
+go build -trimpath -o arcdoctor ./cmd/arcdoctor
+```
+
 ## Guided terminal interface
 
 Run Arc Doctor without arguments in an interactive terminal:
@@ -127,6 +152,8 @@ go run ./cmd/arcdoctor deployment ./deployments/arc-testnet.json \
 
 The same command accepts a Foundry `run-latest.json` broadcast file. Artifact
 overrides use `ContractName=path` and can be repeated.
+See the [deployment manifest reference](docs/deployment-manifest.md) for the
+supported fields and bytecode comparison rules.
 
 Sanitize and export an existing JSON report:
 
@@ -138,6 +165,9 @@ Use `--format text` for a plain-text export. Arc Doctor redaction is a safety
 measure, not a guarantee, so review reports before sharing them. See
 [reporting and redaction](docs/reporting.md) and the
 [diagnostic code reference](docs/diagnostic-codes.md).
+
+The [public Arc Testnet demonstration](docs/quietpact-demo.md) provides
+read-only contract and transaction examples that require no wallet or funds.
 
 ## Example
 
@@ -164,6 +194,8 @@ Evidence: Observed chain ID: 5042002
 - `2`: Arc Doctor could not complete the diagnosis
 
 ## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before adding a rule or diagnostic case.
 
 Run the tests:
 
@@ -195,6 +227,11 @@ The current implementation covers network, address, transaction, ABI-backed
 error, deployment, sanitized reports, and a guided terminal interface.
 
 Arc Doctor is a community-built tool and is not affiliated with or endorsed by Circle.
+
+Semantic case retrieval is intentionally not included. It will be considered
+only after the repository has enough independently reviewed, non-duplicate cases
+to evaluate it against a keyword-search baseline. The core tool does not require
+an embedding model, hosted service, or LLM.
 
 ## License
 

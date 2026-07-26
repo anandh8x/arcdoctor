@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: arcdoctor
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: arcdoctor
+    main: ./cmd/arcdoctor
+    binary: arcdoctor
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/anandh8x/arcdoctor/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/anandh8x/arcdoctor/internal/buildinfo.Commit={{ .Commit }}
+      - -X github.com/anandh8x/arcdoctor/internal/buildinfo.Date={{ .Date }}
+
+archives:
+  - id: arcdoctor
+    ids:
+      - arcdoctor
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  draft: false
+  prerelease: auto

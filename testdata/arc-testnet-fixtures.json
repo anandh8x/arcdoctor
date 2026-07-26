@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "network": {
+    "name": "Arc Testnet",
+    "chainId": 5042002,
+    "rpcUrl": "https://rpc.testnet.arc.network"
+  },
+  "wallet": {
+    "address": "0x99066fBc97557490fA794F750630bb41733D1004"
+  },
+  "contracts": {
+    "InvoiceRegistry": {
+      "address": "0xCe084c9358FBC5200415012885c2F0F0906d400C",
+      "deploymentTransaction": "0xaadb9724bd8211ac78cc818465b0f7d144626e4f8dfd99f908e25f2e8609d1c8",
+      "runtimeBytecodeHash": "0x97f5f9cfea731bf0c54fef6554cf80fa8dd22a8091b723cccd3ff8bd3f68d99e"
+    },
+    "SealedBidAuction": {
+      "address": "0x0C83623d0abFca5e7ad6E6179bB45A3E70C6C9DA",
+      "deploymentTransaction": "0x4ac202bc8b1f25e3a4b466051b87a946ebd2ec2efe7782df45e9e3301a566211",
+      "runtimeBytecodeHash": "0x3426ed8e7407db571417692cb5451e60a9328a97c4efc5cd6c9a61630edf3417"
+    }
+  },
+  "transactions": {
+    "successfulInvoiceCreation": "0x2ae2a47a07856ce9f0f6be62335f558bee7561e5922f53d119c58de66baead17"
+  }
+}
