@@ -637,12 +637,18 @@ func formatReport(report doctor.Report, diagnosticError error) string {
 		))
 	}
 	if report.Network.ExpectedChainID != 0 {
-		builder.WriteString(fmt.Sprintf(
-			"Network: Arc Testnet | chain %d | block %d | %.0f ms\n",
-			report.Network.ObservedChainID,
-			report.Network.BlockNumber,
-			report.Network.LatencyMilliseconds,
-		))
+		if report.Network.ObservedChainID == 0 {
+			builder.WriteString(
+				"Network target: Arc Testnet | evidence incomplete\n",
+			)
+		} else {
+			builder.WriteString(fmt.Sprintf(
+				"Network target: Arc Testnet | observed chain %d | block %d | %.0f ms\n",
+				report.Network.ObservedChainID,
+				report.Network.BlockNumber,
+				report.Network.LatencyMilliseconds,
+			))
+		}
 	}
 	if report.Address != nil {
 		builder.WriteString(fmt.Sprintf(

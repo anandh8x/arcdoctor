@@ -9,6 +9,7 @@ the finding.
 | Code | Meaning |
 | --- | --- |
 | `ARC-NET-000` | Arc Testnet connection confirmed |
+| `ARC-NET-001` | Arc Testnet RPC endpoint is unavailable or timed out |
 | `ARC-NET-002` | RPC endpoint reported the wrong chain ID |
 | `ARC-NET-003` | Latest block appeared stale when observed |
 | `ARC-ADR-000` | Contract bytecode found |
@@ -16,11 +17,15 @@ the finding.
 | `ARC-ADR-002` | No contract bytecode found |
 | `ARC-ADR-003` | Exact EIP-1167 minimal proxy runtime detected |
 | `ARC-ADR-004` | Non-zero EIP-1967 implementation or beacon slot detected |
+| `ARC-ADR-005` | Mixed-case address has an invalid EIP-55 checksum |
 | `ARC-WAL-000` | Optional wallet balance and nonce collected |
 | `ARC-WAL-001` | Optional wallet address is malformed |
 | `ARC-WAL-002` | Wallet target contains contract bytecode |
+| `ARC-WAL-003` | Mixed-case wallet address has an invalid EIP-55 checksum |
 | `ARC-RPC-002` | Optional proxy storage method is unsupported |
 | `ARC-RPC-003` | Optional proxy storage inspection failed |
+| `ARC-RPC-004` | A required RPC method is unsupported |
+| `ARC-RPC-005` | A required RPC request failed after partial evidence collection |
 
 ## Transactions
 

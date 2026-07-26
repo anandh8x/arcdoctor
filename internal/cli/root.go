@@ -424,13 +424,46 @@ func renderTerminal(writer io.Writer, report doctor.Report) error {
 	if report.Network.ExpectedChainID != 0 {
 		if _, err := fmt.Fprintf(
 			writer,
-			"\nNetwork:      Arc Testnet\nChain ID:     %d\nLatest block: %d\nBlock time:   %s\nLatency:      %s\n",
-			report.Network.ObservedChainID,
-			report.Network.BlockNumber,
-			report.Network.BlockTimestamp.Format(time.RFC3339),
-			report.Network.Latency.Round(time.Millisecond),
+			"\nNetwork target: Arc Testnet\nExpected ID:  %d\n",
+			report.Network.ExpectedChainID,
 		); err != nil {
 			return fmt.Errorf("write network report: %w", err)
+		}
+		if report.Network.ObservedChainID != 0 {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Observed ID:  %d\n",
+				report.Network.ObservedChainID,
+			); err != nil {
+				return fmt.Errorf("write observed chain ID: %w", err)
+			}
+		}
+		if report.Network.BlockNumber != 0 {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Latest block: %d\n",
+				report.Network.BlockNumber,
+			); err != nil {
+				return fmt.Errorf("write latest block: %w", err)
+			}
+		}
+		if !report.Network.BlockTimestamp.IsZero() {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Block time:   %s\n",
+				report.Network.BlockTimestamp.Format(time.RFC3339),
+			); err != nil {
+				return fmt.Errorf("write block timestamp: %w", err)
+			}
+		}
+		if report.Network.Latency > 0 {
+			if _, err := fmt.Fprintf(
+				writer,
+				"Latency:      %s\n",
+				report.Network.Latency.Round(time.Millisecond),
+			); err != nil {
+				return fmt.Errorf("write RPC latency: %w", err)
+			}
 		}
 	}
 

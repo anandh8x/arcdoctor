@@ -3,6 +3,7 @@ package doctor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -240,7 +241,8 @@ func (d *Doctor) Diagnose(ctx context.Context, request Request) (Report, error) 
 			report, err = d.diagnoseEnvironment(ctx, request.WalletAddress)
 		}
 	case AddressCheck:
-		if !common.IsHexAddress(request.Target) {
+		address, validation := validateAddress(request.Target)
+		if validation == addressMalformed {
 			report = Report{
 				Findings: []Finding{
 					{
@@ -260,7 +262,28 @@ func (d *Doctor) Diagnose(ctx context.Context, request Request) (Report, error) 
 			}
 			break
 		}
-		report, err = d.diagnoseAddress(ctx, common.HexToAddress(request.Target).Hex())
+		if validation == addressChecksumInvalid {
+			report = Report{
+				Findings: []Finding{
+					{
+						Code:        "ARC-ADR-005",
+						Severity:    SeverityError,
+						Confidence:  ConfidenceCertain,
+						Title:       "Address checksum is invalid",
+						Explanation: "The supplied mixed-case address does not match its EIP-55 checksum.",
+						Evidence: []string{
+							fmt.Sprintf("Supplied address: %q", request.Target),
+							"Expected checksum: " + address,
+						},
+						SuggestedActions: []string{
+							"Copy the checksummed address from the deployment output or ArcScan.",
+						},
+					},
+				},
+			}
+			break
+		}
+		report, err = d.diagnoseAddress(ctx, address)
 	case TransactionCheck:
 		if len(request.Target) != 66 || !common.IsHexHash(request.Target) {
 			report = malformedTransactionReport(request.Target)
@@ -330,7 +353,8 @@ func (d *Doctor) diagnoseEnvironment(
 	if err != nil || report.HasErrors() {
 		return report, err
 	}
-	if !common.IsHexAddress(walletAddress) {
+	address, validation := validateAddress(walletAddress)
+	if validation == addressMalformed {
 		report.Findings = append(report.Findings, Finding{
 			Code:        "ARC-WAL-001",
 			Severity:    SeverityError,
@@ -346,8 +370,24 @@ func (d *Doctor) diagnoseEnvironment(
 		})
 		return report, nil
 	}
+	if validation == addressChecksumInvalid {
+		report.Findings = append(report.Findings, Finding{
+			Code:        "ARC-WAL-003",
+			Severity:    SeverityError,
+			Confidence:  ConfidenceCertain,
+			Title:       "Wallet checksum is invalid",
+			Explanation: "The supplied mixed-case wallet address does not match its EIP-55 checksum.",
+			Evidence: []string{
+				fmt.Sprintf("Supplied wallet: %q", walletAddress),
+				"Expected checksum: " + address,
+			},
+			SuggestedActions: []string{
+				"Copy the checksummed public wallet address from the wallet or ArcScan.",
+			},
+		})
+		return report, nil
+	}
 
-	address := common.HexToAddress(walletAddress).Hex()
 	evidence, addressFindings, err := d.collectAddressEvidence(ctx, address)
 	if err != nil {
 		return report, err
@@ -575,7 +615,15 @@ func addressFromStorageSlot(slot []byte) string {
 func (d *Doctor) diagnoseNetwork(ctx context.Context) (Report, error) {
 	snapshot, err := d.network.NetworkSnapshot(ctx)
 	if err != nil {
-		return Report{}, fmt.Errorf("collect network evidence: %w", err)
+		report := Report{
+			Network: networkEvidence(snapshot),
+		}
+		if errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) {
+			return report, fmt.Errorf("collect network evidence: %w", err)
+		}
+		report.Findings = []Finding{rpcFailureFinding(err)}
+		return report, nil
 	}
 
 	finding := Finding{
@@ -631,16 +679,60 @@ func (d *Doctor) diagnoseNetwork(ctx context.Context) (Report, error) {
 	}
 
 	report := Report{
-		Network: NetworkEvidence{
-			ExpectedChainID:     ArcTestnetChainID,
-			ObservedChainID:     snapshot.ChainID,
-			BlockNumber:         snapshot.BlockNumber,
-			BlockTimestamp:      snapshot.BlockTimestamp,
-			Latency:             snapshot.Latency,
-			LatencyMilliseconds: float64(snapshot.Latency) / float64(time.Millisecond),
-		},
+		Network:  networkEvidence(snapshot),
 		Findings: findings,
 	}
 
 	return report, nil
+}
+
+func networkEvidence(snapshot NetworkSnapshot) NetworkEvidence {
+	return NetworkEvidence{
+		ExpectedChainID:     ArcTestnetChainID,
+		ObservedChainID:     snapshot.ChainID,
+		BlockNumber:         snapshot.BlockNumber,
+		BlockTimestamp:      snapshot.BlockTimestamp,
+		Latency:             snapshot.Latency,
+		LatencyMilliseconds: float64(snapshot.Latency) / float64(time.Millisecond),
+	}
+}
+
+func rpcFailureFinding(err error) Finding {
+	code := "ARC-NET-001"
+	title := "Arc Testnet RPC is unavailable"
+	explanation := "Arc Doctor could not collect the required Arc Testnet evidence from the endpoint."
+	method := "unknown"
+
+	var operationError *RPCOperationError
+	if errors.As(err, &operationError) {
+		if operationError.Method != "" {
+			method = operationError.Method
+		}
+		switch operationError.Kind {
+		case RPCErrorUnsupported:
+			code = "ARC-RPC-004"
+			title = "Required RPC method is unsupported"
+			explanation = "The endpoint reported that a method required for this diagnosis is unsupported."
+		case RPCErrorRequestFailed:
+			code = "ARC-RPC-005"
+			title = "Required RPC request failed"
+			explanation = "The endpoint responded, but Arc Doctor could not collect all required network evidence."
+		}
+	}
+
+	return Finding{
+		Code:        code,
+		Severity:    SeverityError,
+		Confidence:  ConfidenceCertain,
+		Title:       title,
+		Explanation: explanation,
+		Evidence: []string{
+			"RPC method: " + method,
+			"RPC detail: " + err.Error(),
+		},
+		SuggestedActions: []string{
+			"Verify the RPC URL and retry the read-only check.",
+			"Compare the endpoint with another Arc Testnet RPC endpoint.",
+		},
+	}
 }

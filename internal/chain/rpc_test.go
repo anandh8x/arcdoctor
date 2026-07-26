@@ -3,6 +3,7 @@ package chain_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/anandh8x/arcdoctor/internal/chain"
+	"github.com/anandh8x/arcdoctor/internal/doctor"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -115,6 +117,40 @@ func TestRPCProbeCollectsArcNetworkEvidence(t *testing.T) {
 	}
 	if snapshot.ObservedAt.IsZero() {
 		t.Error("ObservedAt is zero")
+	}
+}
+
+func TestRPCProbeClassifiesUnsupportedRequiredMethodAndKeepsChainID(t *testing.T) {
+	t.Parallel()
+
+	httpClient := rpcHTTPClient(t, map[string]any{
+		"eth_chainId": "0x4cef52",
+		"eth_blockNumber": rpcFailure{
+			Code:    -32601,
+			Message: "method not found",
+		},
+	})
+
+	snapshot, err := chain.NewRPCProbe(
+		"http://arcdoctor.test",
+		chain.WithHTTPClient(httpClient),
+	).NetworkSnapshot(context.Background())
+	if err == nil {
+		t.Fatal("NetworkSnapshot() error = nil")
+	}
+	var operationError *doctor.RPCOperationError
+	if !errors.As(err, &operationError) {
+		t.Fatalf("error = %T %v, want RPCOperationError", err, err)
+	}
+	if operationError.Kind != doctor.RPCErrorUnsupported ||
+		operationError.Method != "eth_blockNumber" {
+		t.Errorf("RPC operation error = %#v", operationError)
+	}
+	if snapshot.ChainID != doctor.ArcTestnetChainID {
+		t.Errorf("partial ChainID = %d, want %d", snapshot.ChainID, doctor.ArcTestnetChainID)
+	}
+	if snapshot.ObservedAt.IsZero() || snapshot.Latency <= 0 {
+		t.Errorf("partial timing evidence = %#v", snapshot)
 	}
 }
 

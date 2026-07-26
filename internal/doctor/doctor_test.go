@@ -185,7 +185,7 @@ func TestDiagnoseRejectsUnexpectedChain(t *testing.T) {
 	}
 }
 
-func TestDiagnosePreservesRPCFailureAsOperationalError(t *testing.T) {
+func TestDiagnoseReportsUnavailableRPCAsDiagnosticFinding(t *testing.T) {
 	t.Parallel()
 
 	rpcFailure := errors.New("connection refused")
@@ -197,11 +197,43 @@ func TestDiagnosePreservesRPCFailureAsOperationalError(t *testing.T) {
 		Kind: doctor.NetworkCheck,
 	})
 
-	if !errors.Is(err, rpcFailure) {
-		t.Fatalf("Diagnose() error = %v, want wrapped RPC failure", err)
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
 	}
-	if len(report.Findings) != 0 {
-		t.Fatalf("len(Findings) = %d, want 0 for incomplete diagnosis", len(report.Findings))
+	if !hasFinding(report, "ARC-NET-001") {
+		t.Fatalf("Findings = %#v, want ARC-NET-001", report.Findings)
+	}
+	if !report.HasErrors() {
+		t.Fatal("HasErrors() = false, want diagnostic error")
+	}
+}
+
+func TestDiagnoseDistinguishesUnsupportedRPCMethodAndKeepsPartialEvidence(t *testing.T) {
+	t.Parallel()
+
+	probe := networkProbeFunc(func(context.Context) (doctor.NetworkSnapshot, error) {
+		return doctor.NetworkSnapshot{
+				ChainID:    doctor.ArcTestnetChainID,
+				ObservedAt: time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC),
+				Latency:    12 * time.Millisecond,
+			}, &doctor.RPCOperationError{
+				Method: "eth_blockNumber",
+				Kind:   doctor.RPCErrorUnsupported,
+				Err:    errors.New("method not found"),
+			}
+	})
+
+	report, err := doctor.New(probe).Diagnose(context.Background(), doctor.Request{
+		Kind: doctor.NetworkCheck,
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.Network.ObservedChainID != doctor.ArcTestnetChainID {
+		t.Fatalf("partial network evidence = %#v", report.Network)
+	}
+	if !hasFinding(report, "ARC-RPC-004") {
+		t.Fatalf("Findings = %#v, want ARC-RPC-004", report.Findings)
 	}
 }
 
@@ -274,6 +306,58 @@ func TestDiagnoseAddressRejectsMalformedTargetBeforeRPC(t *testing.T) {
 			report.Findings[0].Confidence,
 			doctor.ConfidenceCertain,
 		)
+	}
+}
+
+func TestDiagnoseAddressRejectsInvalidMixedCaseChecksumBeforeRPC(t *testing.T) {
+	t.Parallel()
+
+	networkCalled := false
+	probe := networkProbeFunc(func(context.Context) (doctor.NetworkSnapshot, error) {
+		networkCalled = true
+		return doctor.NetworkSnapshot{}, nil
+	})
+	report, err := doctor.New(probe).Diagnose(context.Background(), doctor.Request{
+		Kind:   doctor.AddressCheck,
+		Target: "0xce084c9358FBC5200415012885c2F0F0906d400C",
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if networkCalled {
+		t.Fatal("network probe was called for invalid checksum")
+	}
+	if !hasFinding(report, "ARC-ADR-005") {
+		t.Fatalf("Findings = %#v, want ARC-ADR-005", report.Findings)
+	}
+}
+
+func TestDiagnoseAddressAcceptsLowercaseAndReportsChecksummedAddress(t *testing.T) {
+	t.Parallel()
+
+	const lowercase = "0xce084c9358fbc5200415012885c2f0f0906d400c"
+	address := addressProbeFunc(func(
+		_ context.Context,
+		got string,
+	) (doctor.AddressSnapshot, error) {
+		if got != "0xCe084c9358FBC5200415012885c2F0F0906d400C" {
+			t.Errorf("address = %q, want checksummed presentation", got)
+		}
+		return doctor.AddressSnapshot{BalanceBaseUnits: big.NewInt(0)}, nil
+	})
+	report, err := doctor.New(
+		arcNetworkProbe(),
+		doctor.WithAddressProbe(address),
+	).Diagnose(context.Background(), doctor.Request{
+		Kind:   doctor.AddressCheck,
+		Target: lowercase,
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.Address == nil ||
+		report.Address.Address != "0xCe084c9358FBC5200415012885c2F0F0906d400C" {
+		t.Fatalf("Address = %#v, want checksummed presentation", report.Address)
 	}
 }
 

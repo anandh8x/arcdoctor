@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -46,22 +47,28 @@ func NewRPCProbe(url string, options ...RPCProbeOption) *RPCProbe {
 
 func (p *RPCProbe) NetworkSnapshot(ctx context.Context) (doctor.NetworkSnapshot, error) {
 	startedAt := time.Now()
+	snapshot := doctor.NetworkSnapshot{}
 
 	client, err := rpc.DialOptions(ctx, p.url, rpc.WithHTTPClient(p.httpClient))
 	if err != nil {
-		return doctor.NetworkSnapshot{}, fmt.Errorf("connect to RPC endpoint: %w", err)
+		finishNetworkSnapshot(&snapshot, startedAt)
+		return snapshot, classifyRPCOperationError("connect", err)
 	}
 	defer client.Close()
 
 	var chainID hexutil.Uint64
 	if err := callContext(ctx, client, &chainID, "eth_chainId"); err != nil {
-		return doctor.NetworkSnapshot{}, fmt.Errorf("read chain ID: %w", err)
+		finishNetworkSnapshot(&snapshot, startedAt)
+		return snapshot, classifyRPCOperationError("eth_chainId", err)
 	}
+	snapshot.ChainID = uint64(chainID)
 
 	var blockNumber hexutil.Uint64
 	if err := callContext(ctx, client, &blockNumber, "eth_blockNumber"); err != nil {
-		return doctor.NetworkSnapshot{}, fmt.Errorf("read latest block number: %w", err)
+		finishNetworkSnapshot(&snapshot, startedAt)
+		return snapshot, classifyRPCOperationError("eth_blockNumber", err)
 	}
+	snapshot.BlockNumber = uint64(blockNumber)
 
 	var block *struct {
 		Timestamp hexutil.Uint64 `json:"timestamp"`
@@ -74,19 +81,46 @@ func (p *RPCProbe) NetworkSnapshot(ctx context.Context) (doctor.NetworkSnapshot,
 		hexutil.EncodeUint64(uint64(blockNumber)),
 		false,
 	); err != nil {
-		return doctor.NetworkSnapshot{}, fmt.Errorf("read latest block: %w", err)
+		finishNetworkSnapshot(&snapshot, startedAt)
+		return snapshot, classifyRPCOperationError("eth_getBlockByNumber", err)
 	}
 	if block == nil {
-		return doctor.NetworkSnapshot{}, fmt.Errorf("read latest block: RPC returned null")
+		finishNetworkSnapshot(&snapshot, startedAt)
+		return snapshot, &doctor.RPCOperationError{
+			Method: "eth_getBlockByNumber",
+			Kind:   doctor.RPCErrorRequestFailed,
+			Err:    errors.New("RPC returned null"),
+		}
 	}
 
-	return doctor.NetworkSnapshot{
-		ChainID:        uint64(chainID),
-		BlockNumber:    uint64(blockNumber),
-		BlockTimestamp: time.Unix(int64(block.Timestamp), 0).UTC(),
-		ObservedAt:     time.Now().UTC(),
-		Latency:        time.Since(startedAt),
-	}, nil
+	snapshot.BlockTimestamp = time.Unix(int64(block.Timestamp), 0).UTC()
+	finishNetworkSnapshot(&snapshot, startedAt)
+	return snapshot, nil
+}
+
+func finishNetworkSnapshot(snapshot *doctor.NetworkSnapshot, startedAt time.Time) {
+	snapshot.ObservedAt = time.Now().UTC()
+	snapshot.Latency = time.Since(startedAt)
+}
+
+func classifyRPCOperationError(method string, err error) error {
+	kind := doctor.RPCErrorRequestFailed
+	var rpcError rpc.Error
+	if errors.As(err, &rpcError) && rpcError.ErrorCode() == -32601 {
+		kind = doctor.RPCErrorUnsupported
+	} else {
+		var networkError net.Error
+		if errors.As(err, &networkError) ||
+			errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, context.Canceled) {
+			kind = doctor.RPCErrorUnavailable
+		}
+	}
+	return &doctor.RPCOperationError{
+		Method: method,
+		Kind:   kind,
+		Err:    err,
+	}
 }
 
 func (p *RPCProbe) AddressSnapshot(

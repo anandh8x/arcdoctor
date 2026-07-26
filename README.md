@@ -11,7 +11,7 @@ It collects evidence from Arc RPC responses and turns common network problems in
 - Read the latest block number and timestamp
 - Measure RPC evidence collection latency
 - Report a wrong-network configuration
-- Validate EVM addresses before making RPC requests
+- Validate EVM syntax and mixed-case EIP-55 checksums before making RPC requests
 - Classify addresses by deployed bytecode
 - Report raw native-token balance, nonce, bytecode size, and bytecode hash
 - Detect exact EIP-1167 minimal proxies and non-zero EIP-1967 implementation
@@ -185,8 +185,9 @@ read-only contract and transaction examples that require no wallet or funds.
 ```text
 Arc Doctor
 
-Network:      Arc Testnet
-Chain ID:     5042002
+Network target: Arc Testnet
+Expected ID:  5042002
+Observed ID:  5042002
 Latest block: 53717781
 Block time:   2026-07-26T07:06:12Z
 Latency:      1.909s

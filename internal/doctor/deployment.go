@@ -257,7 +257,8 @@ func (d *Doctor) diagnoseDeploymentContract(
 			},
 		})
 	}
-	if !common.IsHexAddress(contract.Address) {
+	address, validation := validateAddress(contract.Address)
+	if validation == addressMalformed {
 		findings = append(findings, Finding{
 			Code:        "ARC-DEP-005",
 			Severity:    SeverityError,
@@ -271,8 +272,25 @@ func (d *Doctor) diagnoseDeploymentContract(
 		})
 		return evidence, findings, nil
 	}
+	if validation == addressChecksumInvalid {
+		findings = append(findings, Finding{
+			Code:        "ARC-DEP-005",
+			Severity:    SeverityError,
+			Confidence:  ConfidenceCertain,
+			Title:       "Deployment address checksum is invalid",
+			Explanation: "The configured mixed-case address does not match its EIP-55 checksum.",
+			Evidence: []string{
+				fmt.Sprintf("Contract: %s", contract.Name),
+				fmt.Sprintf("Configured address: %q", contract.Address),
+				"Expected checksum: " + address,
+			},
+			SuggestedActions: []string{
+				"Copy the checksummed address from the deployment receipt.",
+			},
+		})
+		return evidence, findings, nil
+	}
 
-	address := common.HexToAddress(contract.Address).Hex()
 	evidence.Address = address
 	evidence.AddressExplorerURL = ArcTestnetExplorerURL + "/address/" + address
 	lowerAddress := strings.ToLower(address)
